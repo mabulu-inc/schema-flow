@@ -1,0 +1,51 @@
+# Schema for table: posts
+# Foreign keys reference other tables — schema-flow handles the ordering.
+
+table: posts
+
+columns:
+  - name: id
+    type: serial
+    primary_key: true
+
+  - name: author_id
+    type: integer
+    references:
+      table: users
+      column: id
+      on_delete: CASCADE
+
+  - name: title
+    type: varchar(255)
+
+  - name: slug
+    type: varchar(255)
+    unique: true
+
+  - name: body
+    type: text
+    nullable: true
+
+  - name: status
+    type: varchar(20)
+    default: "'draft'"
+
+  - name: published_at
+    type: timestamptz
+    nullable: true
+
+  - name: created_at
+    type: timestamptz
+    default: now()
+
+  - name: updated_at
+    type: timestamptz
+    default: now()
+
+indexes:
+  - columns: [author_id]
+
+  - columns: [slug]
+    unique: true
+
+  - columns: [status, published_at]

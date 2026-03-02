@@ -1,0 +1,289 @@
+// src/introspect/index.ts
+// Introspect the current PostgreSQL database state
+
+import pg from "pg";
+import type { TableSchema, ColumnDef, IndexDef, ForeignKeyAction } from "../schema/types.js";
+import { logger } from "../core/logger.js";
+
+export interface DbColumn {
+  column_name: string;
+  data_type: string;
+  udt_name: string;
+  is_nullable: string;
+  column_default: string | null;
+  character_maximum_length: number | null;
+  numeric_precision: number | null;
+  numeric_scale: number | null;
+}
+
+export interface DbConstraint {
+  constraint_name: string;
+  constraint_type: string;
+  column_name: string;
+  foreign_table_name: string | null;
+  foreign_column_name: string | null;
+  delete_rule: string | null;
+  update_rule: string | null;
+}
+
+export interface DbIndex {
+  indexname: string;
+  indexdef: string;
+}
+
+export interface DbFunction {
+  routine_name: string;
+  routine_type: string;
+  data_type: string;
+  external_language: string;
+  routine_definition: string;
+  parameter_list: string;
+}
+
+/** Get all user tables in the schema */
+export async function getExistingTables(
+  client: pg.PoolClient,
+  pgSchema: string
+): Promise<string[]> {
+  const res = await client.query(
+    `SELECT table_name FROM information_schema.tables
+     WHERE table_schema = $1 AND table_type = 'BASE TABLE'
+     ORDER BY table_name`,
+    [pgSchema]
+  );
+  return res.rows.map((r) => r.table_name);
+}
+
+/** Get columns for a specific table */
+export async function getTableColumns(
+  client: pg.PoolClient,
+  tableName: string,
+  pgSchema: string
+): Promise<DbColumn[]> {
+  const res = await client.query<DbColumn>(
+    `SELECT
+       column_name,
+       data_type,
+       udt_name,
+       is_nullable,
+       column_default,
+       character_maximum_length,
+       numeric_precision,
+       numeric_scale
+     FROM information_schema.columns
+     WHERE table_schema = $1 AND table_name = $2
+     ORDER BY ordinal_position`,
+    [pgSchema, tableName]
+  );
+  return res.rows;
+}
+
+/** Get all constraints for a table using pg_catalog (works regardless of ownership) */
+export async function getTableConstraints(
+  client: pg.PoolClient,
+  tableName: string,
+  pgSchema: string
+): Promise<DbConstraint[]> {
+  const res = await client.query<DbConstraint>(
+    `SELECT
+       c.conname AS constraint_name,
+       CASE c.contype
+         WHEN 'p' THEN 'PRIMARY KEY'
+         WHEN 'f' THEN 'FOREIGN KEY'
+         WHEN 'u' THEN 'UNIQUE'
+         WHEN 'c' THEN 'CHECK'
+       END AS constraint_type,
+       a.attname AS column_name,
+       ft.relname AS foreign_table_name,
+       fa.attname AS foreign_column_name,
+       CASE c.confdeltype
+         WHEN 'a' THEN 'NO ACTION'
+         WHEN 'r' THEN 'RESTRICT'
+         WHEN 'c' THEN 'CASCADE'
+         WHEN 'n' THEN 'SET NULL'
+         WHEN 'd' THEN 'SET DEFAULT'
+       END AS delete_rule,
+       CASE c.confupdtype
+         WHEN 'a' THEN 'NO ACTION'
+         WHEN 'r' THEN 'RESTRICT'
+         WHEN 'c' THEN 'CASCADE'
+         WHEN 'n' THEN 'SET NULL'
+         WHEN 'd' THEN 'SET DEFAULT'
+       END AS update_rule
+     FROM pg_constraint c
+     JOIN pg_class t ON c.conrelid = t.oid
+     JOIN pg_namespace n ON t.relnamespace = n.oid
+     LEFT JOIN LATERAL unnest(c.conkey) WITH ORDINALITY AS ak(attnum, ord) ON true
+     LEFT JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = ak.attnum
+     LEFT JOIN pg_class ft ON c.confrelid = ft.oid
+     LEFT JOIN LATERAL unnest(c.confkey) WITH ORDINALITY AS fk(attnum, ord) ON fk.ord = ak.ord
+     LEFT JOIN pg_attribute fa ON fa.attrelid = ft.oid AND fa.attnum = fk.attnum
+     WHERE n.nspname = $1 AND t.relname = $2
+     ORDER BY c.conname, ak.ord`,
+    [pgSchema, tableName]
+  );
+  return res.rows;
+}
+
+/** Get indexes for a table */
+export async function getTableIndexes(
+  client: pg.PoolClient,
+  tableName: string,
+  pgSchema: string
+): Promise<DbIndex[]> {
+  const res = await client.query<DbIndex>(
+    `SELECT indexname, indexdef
+     FROM pg_indexes
+     WHERE schemaname = $1 AND tablename = $2`,
+    [pgSchema, tableName]
+  );
+  return res.rows;
+}
+
+/** Build a full picture of the current DB state for a single table */
+export async function introspectTable(
+  client: pg.PoolClient,
+  tableName: string,
+  pgSchema: string
+): Promise<TableSchema> {
+  const dbCols = await getTableColumns(client, tableName, pgSchema);
+  const dbConstraints = await getTableConstraints(client, tableName, pgSchema);
+
+  // Group constraints
+  const pkColumns: string[] = [];
+  const uniqueColumns = new Set<string>();
+  const fkMap = new Map<string, DbConstraint[]>();
+
+  for (const c of dbConstraints) {
+    if (c.constraint_type === "PRIMARY KEY") {
+      pkColumns.push(c.column_name);
+    } else if (c.constraint_type === "UNIQUE") {
+      uniqueColumns.add(c.column_name);
+    } else if (c.constraint_type === "FOREIGN KEY") {
+      if (!fkMap.has(c.constraint_name)) fkMap.set(c.constraint_name, []);
+      fkMap.get(c.constraint_name)!.push(c);
+    }
+  }
+
+  const isSinglePk = pkColumns.length === 1;
+
+  const columns: ColumnDef[] = dbCols.map((col) => {
+    const colType = resolveColumnType(col);
+    const def: ColumnDef = {
+      name: col.column_name,
+      type: colType,
+    };
+
+    if (col.is_nullable === "YES") {
+      def.nullable = true;
+    }
+
+    if (col.column_default !== null && !col.column_default.startsWith("nextval(")) {
+      def.default = col.column_default;
+    }
+
+    if (isSinglePk && pkColumns[0] === col.column_name) {
+      def.primary_key = true;
+    }
+
+    if (uniqueColumns.has(col.column_name)) {
+      def.unique = true;
+    }
+
+    // Check for FK on this column (single-column FK)
+    for (const [, fkCols] of fkMap) {
+      if (fkCols.length === 1 && fkCols[0].column_name === col.column_name) {
+        def.references = {
+          table: fkCols[0].foreign_table_name!,
+          column: fkCols[0].foreign_column_name!,
+          on_delete: (fkCols[0].delete_rule || "NO ACTION") as ColumnDef["references"] extends { on_delete?: infer T } ? T : never,
+          on_update: (fkCols[0].update_rule || "NO ACTION") as ColumnDef["references"] extends { on_update?: infer T } ? T : never,
+        };
+      }
+    }
+
+    return def;
+  });
+
+  const schema: TableSchema = {
+    table: tableName,
+    columns,
+  };
+
+  if (!isSinglePk && pkColumns.length > 1) {
+    schema.primary_key = pkColumns;
+  }
+
+  return schema;
+}
+
+/** Get all functions in the schema */
+export async function getExistingFunctions(
+  client: pg.PoolClient,
+  pgSchema: string
+): Promise<DbFunction[]> {
+  const res = await client.query<DbFunction>(
+    `SELECT
+       r.routine_name,
+       r.routine_type,
+       r.data_type,
+       r.external_language,
+       r.routine_definition,
+       COALESCE(
+         string_agg(p.parameter_name || ' ' || p.data_type, ', ' ORDER BY p.ordinal_position),
+         ''
+       ) AS parameter_list
+     FROM information_schema.routines r
+     LEFT JOIN information_schema.parameters p
+       ON r.specific_name = p.specific_name AND p.parameter_mode = 'IN'
+     WHERE r.routine_schema = $1
+       AND r.routine_type = 'FUNCTION'
+       AND r.routine_name NOT LIKE 'pg_%'
+     GROUP BY r.routine_name, r.routine_type, r.data_type, r.external_language, r.routine_definition
+     ORDER BY r.routine_name`,
+    [pgSchema]
+  );
+  return res.rows;
+}
+
+/** Resolve a column type from information_schema to a user-friendly string */
+function resolveColumnType(col: DbColumn): string {
+  const { udt_name, data_type, character_maximum_length, numeric_precision, numeric_scale } = col;
+
+  // Handle serial types via column_default
+  if (col.column_default?.startsWith("nextval(")) {
+    if (udt_name === "int4") return "serial";
+    if (udt_name === "int8") return "bigserial";
+    if (udt_name === "int2") return "smallserial";
+  }
+
+  // Handle common type mappings
+  switch (udt_name) {
+    case "int4":
+      return "integer";
+    case "int8":
+      return "bigint";
+    case "int2":
+      return "smallint";
+    case "float4":
+      return "real";
+    case "float8":
+      return "double precision";
+    case "bool":
+      return "boolean";
+    case "varchar":
+      return character_maximum_length ? `varchar(${character_maximum_length})` : "varchar";
+    case "bpchar":
+      return character_maximum_length ? `char(${character_maximum_length})` : "char";
+    case "numeric":
+      if (numeric_precision && numeric_scale) return `numeric(${numeric_precision},${numeric_scale})`;
+      if (numeric_precision) return `numeric(${numeric_precision})`;
+      return "numeric";
+    case "timestamptz":
+      return "timestamptz";
+    case "timestamp":
+      return "timestamp";
+    default:
+      return udt_name;
+  }
+}

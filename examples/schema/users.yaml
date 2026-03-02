@@ -1,0 +1,42 @@
+# Schema for table: users
+# One file per table. Everything about this table lives here.
+
+table: users
+
+columns:
+  - name: id
+    type: serial
+    primary_key: true
+
+  - name: email
+    type: varchar(255)
+    unique: true
+
+  - name: display_name
+    type: varchar(100)
+
+  - name: avatar_url
+    type: text
+    nullable: true
+
+  - name: is_active
+    type: boolean
+    default: "true"
+
+  - name: created_at
+    type: timestamptz
+    default: now()
+
+  - name: updated_at
+    type: timestamptz
+    default: now()
+
+indexes:
+  - columns: [email]
+    unique: true
+
+  - columns: [created_at]
+
+checks:
+  - name: chk_email_format
+    expression: "email ~* '^[^@]+@[^@]+\\.[^@]+$'"

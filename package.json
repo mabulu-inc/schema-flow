@@ -1,0 +1,50 @@
+{
+  "name": "@mabulu-inc/schema-flow",
+  "version": "1.0.0",
+  "description": "Declarative zero-downtime PostgreSQL migrations. Flows your schema from current state to desired state via YAML-driven table definitions and procedural pre/post scripts.",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "schema-flow": "./dist/cli/index.js"
+  },
+  "exports": {
+    ".": "./dist/index.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "chalk": "^5.6.2",
+    "glob": "^13.0.6",
+    "pg": "^8.19.0",
+    "yaml": "^2.8.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.19.13",
+    "@types/pg": "^8.18.0",
+    "typescript": "^5.9.3"
+  },
+  "keywords": [
+    "postgres",
+    "migration",
+    "declarative",
+    "zero-downtime",
+    "schema",
+    "yaml",
+    "database"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mabulu-inc/schema-flow"
+  }
+}
