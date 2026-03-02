@@ -19,10 +19,7 @@ export function getPool(connectionString: string): pg.Pool {
   return pool;
 }
 
-export async function withClient<T>(
-  connectionString: string,
-  fn: (client: pg.PoolClient) => Promise<T>
-): Promise<T> {
+export async function withClient<T>(connectionString: string, fn: (client: pg.PoolClient) => Promise<T>): Promise<T> {
   const p = getPool(connectionString);
   const client = await p.connect();
   try {
@@ -34,7 +31,7 @@ export async function withClient<T>(
 
 export async function withTransaction<T>(
   connectionString: string,
-  fn: (client: pg.PoolClient) => Promise<T>
+  fn: (client: pg.PoolClient) => Promise<T>,
 ): Promise<T> {
   const p = getPool(connectionString);
   const client = await p.connect();

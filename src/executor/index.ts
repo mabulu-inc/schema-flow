@@ -4,14 +4,12 @@
 
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import pg from "pg";
 import { glob } from "glob";
 import type { SchemaFlowConfig } from "../core/config.js";
-import type { MigrationPlan } from "../planner/index.js";
 import { buildPlan } from "../planner/index.js";
 import { parseTableFile } from "../schema/parser.js";
 import { FileTracker } from "../core/tracker.js";
-import { withClient, withTransaction } from "../core/db.js";
+import { withClient } from "../core/db.js";
 import { logger } from "../core/logger.js";
 
 export type Phase = "pre" | "migrate" | "post";
@@ -22,6 +20,8 @@ export interface ExecutionResult {
   operationsExecuted: number;
   errors: string[];
   dryRun: boolean;
+  /** Number of destructive operations that were blocked by safe mode */
+  blockedDestructive: number;
 }
 
 /** Discover and sort SQL scripts in a directory */
@@ -59,7 +59,14 @@ export async function runMigrate(config: SchemaFlowConfig): Promise<ExecutionRes
   const schemaFiles = await discoverSchemaFiles(config.schemaDir);
   if (schemaFiles.length === 0) {
     logger.info("No schema files found — skipping migration phase");
-    return { phase: "migrate", success: true, operationsExecuted: 0, errors: [], dryRun: config.dryRun };
+    return {
+      phase: "migrate",
+      success: true,
+      operationsExecuted: 0,
+      errors: [],
+      dryRun: config.dryRun,
+      blockedDestructive: 0,
+    };
   }
 
   const tracker = new FileTracker(config.historyTable);
@@ -69,39 +76,55 @@ export async function runMigrate(config: SchemaFlowConfig): Promise<ExecutionRes
     const tracked = await tracker.getTracked(client);
 
     // Classify schema files
-    const { newFiles, changedFiles, unchangedFiles } = tracker.classifyFiles(
-      schemaFiles,
-      tracked,
-      "schema"
-    );
+    const { newFiles, changedFiles, unchangedFiles } = tracker.classifyFiles(schemaFiles, tracked, "schema");
 
-    logger.info(`Schema files: ${newFiles.length} new, ${changedFiles.length} changed, ${unchangedFiles.length} unchanged`);
+    logger.info(
+      `Schema files: ${newFiles.length} new, ${changedFiles.length} changed, ${unchangedFiles.length} unchanged`,
+    );
 
     if (newFiles.length === 0 && changedFiles.length === 0) {
       logger.success("Schema is up to date — nothing to do");
-      return { phase: "migrate", success: true, operationsExecuted: 0, errors: [], dryRun: config.dryRun };
+      return {
+        phase: "migrate",
+        success: true,
+        operationsExecuted: 0,
+        errors: [],
+        dryRun: config.dryRun,
+        blockedDestructive: 0,
+      };
     }
 
     // Parse ALL schema files (not just changed ones) to build complete picture for FK resolution
-    const allSchemas = schemaFiles.map((f) => {
-      try {
-        return parseTableFile(f);
-      } catch (err) {
-        const msg = `Failed to parse ${f}: ${err instanceof Error ? err.message : String(err)}`;
-        errors.push(msg);
-        logger.error(msg);
-        return null;
-      }
-    }).filter(Boolean) as Awaited<ReturnType<typeof parseTableFile>>[];
+    const allSchemas = schemaFiles
+      .map((f) => {
+        try {
+          return parseTableFile(f);
+        } catch (err) {
+          const msg = `Failed to parse ${f}: ${err instanceof Error ? err.message : String(err)}`;
+          errors.push(msg);
+          logger.error(msg);
+          return null;
+        }
+      })
+      .filter(Boolean) as Awaited<ReturnType<typeof parseTableFile>>[];
 
     if (errors.length > 0) {
-      return { phase: "migrate", success: false, operationsExecuted: 0, errors, dryRun: config.dryRun };
+      return {
+        phase: "migrate",
+        success: false,
+        operationsExecuted: 0,
+        errors,
+        dryRun: config.dryRun,
+        blockedDestructive: 0,
+      };
     }
 
-    // Build migration plan
-    const plan = await buildPlan(client, allSchemas, config.pgSchema);
+    // Build migration plan — pass safety flag
+    const plan = await buildPlan(client, allSchemas, config.pgSchema, {
+      allowDestructive: config.allowDestructive,
+    });
 
-    if (plan.operations.length === 0) {
+    if (plan.operations.length === 0 && plan.blocked.length === 0) {
       logger.success("Database matches desired schema — nothing to do");
       // Update tracking for changed files (content changed but schema matches)
       if (!config.dryRun) {
@@ -109,7 +132,14 @@ export async function runMigrate(config: SchemaFlowConfig): Promise<ExecutionRes
           await tracker.recordFile(client, f, "schema");
         }
       }
-      return { phase: "migrate", success: true, operationsExecuted: 0, errors: [], dryRun: config.dryRun };
+      return {
+        phase: "migrate",
+        success: true,
+        operationsExecuted: 0,
+        errors: [],
+        dryRun: config.dryRun,
+        blockedDestructive: 0,
+      };
     }
 
     // Log the plan
@@ -124,23 +154,32 @@ export async function runMigrate(config: SchemaFlowConfig): Promise<ExecutionRes
     if (plan.summary.foreignKeysToAdd > 0) {
       logger.info(`  Foreign keys to add: ${plan.summary.foreignKeysToAdd}`);
     }
+    if (plan.summary.destructiveCount > 0) {
+      logger.warn(`  Destructive operations: ${plan.summary.destructiveCount} (--allow-destructive is ON)`);
+    }
+    if (plan.summary.blockedCount > 0) {
+      logger.warn(`  Blocked (destructive): ${plan.summary.blockedCount} — use --allow-destructive to include`);
+    }
     logger.divider();
 
     for (const op of plan.operations) {
-      logger.info(`  ${config.dryRun ? "[DRY RUN] " : ""}${op.description}`);
+      const marker = op.destructive ? "⚠ DESTRUCTIVE " : "";
+      logger.info(`  ${config.dryRun ? "[DRY RUN] " : ""}${marker}${op.description}`);
       if (config.dryRun) {
         logger.debug(`  SQL: ${op.sql}`);
       }
     }
 
     if (config.dryRun) {
-      logger.info(`Dry run complete — ${plan.operations.length} operations would be executed`);
+      const suffix = plan.blocked.length > 0 ? ` (${plan.blocked.length} destructive operations blocked)` : "";
+      logger.info(`Dry run complete — ${plan.operations.length} operations would be executed${suffix}`);
       return {
         phase: "migrate",
         success: true,
         operationsExecuted: plan.operations.length,
         errors: [],
         dryRun: true,
+        blockedDestructive: plan.blocked.length,
       };
     }
 
@@ -158,7 +197,8 @@ export async function runMigrate(config: SchemaFlowConfig): Promise<ExecutionRes
         if (nonIndexOps.length > 0) {
           await client.query("BEGIN");
           for (const op of nonIndexOps) {
-            logger.debug(`Executing: ${op.description}`);
+            const marker = op.destructive ? "[DESTRUCTIVE] " : "";
+            logger.debug(`Executing: ${marker}${op.description}`);
             await client.query(op.sql);
             opsExecuted++;
           }
@@ -191,6 +231,11 @@ export async function runMigrate(config: SchemaFlowConfig): Promise<ExecutionRes
       }
 
       logger.success(`Migration complete — ${opsExecuted} operations executed`);
+      if (plan.blocked.length > 0) {
+        logger.warn(
+          `${plan.blocked.length} destructive operation(s) were skipped. Use --allow-destructive to apply them.`,
+        );
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       errors.push(msg);
@@ -208,23 +253,20 @@ export async function runMigrate(config: SchemaFlowConfig): Promise<ExecutionRes
       operationsExecuted: opsExecuted,
       errors,
       dryRun: false,
+      blockedDestructive: plan.blocked.length,
     };
   });
 }
 
 /** Run SQL scripts from a directory, tracking changes */
-async function runSqlScripts(
-  config: SchemaFlowConfig,
-  dir: string,
-  phase: "pre" | "post"
-): Promise<ExecutionResult> {
+async function runSqlScripts(config: SchemaFlowConfig, dir: string, phase: "pre" | "post"): Promise<ExecutionResult> {
   const errors: string[] = [];
   let opsExecuted = 0;
 
   const scripts = await discoverScripts(dir);
   if (scripts.length === 0) {
     logger.info(`No ${phase}-migration scripts found — skipping`);
-    return { phase, success: true, operationsExecuted: 0, errors: [], dryRun: config.dryRun };
+    return { phase, success: true, operationsExecuted: 0, errors: [], dryRun: config.dryRun, blockedDestructive: 0 };
   }
 
   const tracker = new FileTracker(config.historyTable);
@@ -235,13 +277,15 @@ async function runSqlScripts(
 
     const { newFiles, changedFiles, unchangedFiles } = tracker.classifyFiles(scripts, tracked, phase);
 
-    logger.info(`${phase} scripts: ${newFiles.length} new, ${changedFiles.length} changed, ${unchangedFiles.length} unchanged`);
+    logger.info(
+      `${phase} scripts: ${newFiles.length} new, ${changedFiles.length} changed, ${unchangedFiles.length} unchanged`,
+    );
 
     const toRun = [...newFiles, ...changedFiles].sort();
 
     if (toRun.length === 0) {
       logger.success(`All ${phase}-migration scripts are up to date`);
-      return { phase, success: true, operationsExecuted: 0, errors: [], dryRun: config.dryRun };
+      return { phase, success: true, operationsExecuted: 0, errors: [], dryRun: config.dryRun, blockedDestructive: 0 };
     }
 
     for (const scriptPath of toRun) {
@@ -284,6 +328,7 @@ async function runSqlScripts(
       operationsExecuted: opsExecuted,
       errors,
       dryRun: config.dryRun,
+      blockedDestructive: 0,
     };
   });
 }

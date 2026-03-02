@@ -21,7 +21,22 @@
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
-    "prepublishOnly": "npm run build"
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint 'src/**/*.ts' 'test/**/*.ts'",
+    "format": "prettier --write 'src/**/*.ts' 'test/**/*.ts'",
+    "format:check": "prettier --check 'src/**/*.ts' 'test/**/*.ts'",
+    "audit:deps": "pnpm audit --prod",
+    "pack:check": "pnpm pack --pack-destination /tmp/sf-pack-check && rm -f /tmp/sf-pack-check/*.tgz",
+    "outdated:check": "pnpm outdated || true",
+    "ci": "pnpm install --frozen-lockfile && pnpm run lint && pnpm run format:check && pnpm run typecheck && pnpm run test && pnpm run audit:deps",
+    "test": "vitest run --coverage",
+    "test:watch": "vitest",
+    "test:db": "./scripts/test-db-start.sh",
+    "test:db:stop": "./scripts/test-db-stop.sh",
+    "test:db:ensure": "./scripts/test-db-ensure.sh",
+    "pretest": "pnpm run test:db:ensure && tsc",
+    "posttest": "pnpm run test:db:stop",
+    "prepublishOnly": "pnpm run build"
   },
   "dependencies": {
     "chalk": "^5.6.2",
@@ -30,9 +45,16 @@
     "yaml": "^2.8.2"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@types/node": "^22.19.13",
     "@types/pg": "^8.18.0",
-    "typescript": "^5.9.3"
+    "@vitest/coverage-v8": "^4.0.18",
+    "eslint": "^10.0.2",
+    "eslint-config-prettier": "^10.1.8",
+    "prettier": "^3.8.1",
+    "typescript": "^5.9.3",
+    "typescript-eslint": "^8.56.1",
+    "vitest": "^4.0.18"
   },
   "keywords": [
     "postgres",

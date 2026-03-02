@@ -21,7 +21,15 @@ export interface SchemaFlowConfig {
   historyTable: string;
   /** Dry run mode */
   dryRun: boolean;
+  /**
+   * Allow destructive operations (column drops, table drops, narrowing type changes).
+   * By default, schema-flow only performs safe, additive operations.
+   * Set to true via --allow-destructive flag or SCHEMA_FLOW_ALLOW_DESTRUCTIVE=true.
+   */
+  allowDestructive: boolean;
 }
+
+const CONVENTION_DIR = "schema-flow";
 
 const DEFAULTS = {
   schemaDir: "schema",
@@ -33,21 +41,23 @@ const DEFAULTS = {
 
 export function resolveConfig(overrides: Partial<SchemaFlowConfig> = {}): SchemaFlowConfig {
   const connectionString =
-    overrides.connectionString ||
-    process.env.DATABASE_URL ||
-    process.env.SCHEMA_FLOW_DATABASE_URL ||
-    "";
+    overrides.connectionString || process.env.DATABASE_URL || process.env.SCHEMA_FLOW_DATABASE_URL || "";
 
   if (!connectionString) {
     throw new Error(
-      "No database connection string provided. Set DATABASE_URL or SCHEMA_FLOW_DATABASE_URL, or pass --connection-string."
+      "No database connection string provided. Set DATABASE_URL or SCHEMA_FLOW_DATABASE_URL, or pass --connection-string.",
     );
   }
 
-  const baseDir = overrides.baseDir || process.cwd();
+  const cwd = overrides.baseDir || process.cwd();
+  // Convention: look for a schema-flow/ directory inside the base dir
+  const baseDir = existsSync(path.join(cwd, CONVENTION_DIR)) ? path.join(cwd, CONVENTION_DIR) : cwd;
   const schemaDir = path.resolve(baseDir, overrides.schemaDir || DEFAULTS.schemaDir);
   const preDir = path.resolve(baseDir, overrides.preDir || DEFAULTS.preDir);
   const postDir = path.resolve(baseDir, overrides.postDir || DEFAULTS.postDir);
+
+  const allowDestructive =
+    overrides.allowDestructive ?? (process.env.SCHEMA_FLOW_ALLOW_DESTRUCTIVE === "true" || false);
 
   return {
     connectionString,
@@ -58,6 +68,7 @@ export function resolveConfig(overrides: Partial<SchemaFlowConfig> = {}): Schema
     pgSchema: overrides.pgSchema || DEFAULTS.pgSchema,
     historyTable: overrides.historyTable || DEFAULTS.historyTable,
     dryRun: overrides.dryRun ?? false,
+    allowDestructive,
   };
 }
 

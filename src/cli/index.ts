@@ -18,6 +18,7 @@ interface CliArgs {
     dryRun: boolean;
     verbose: boolean;
     quiet: boolean;
+    allowDestructive: boolean;
     connectionString?: string;
     baseDir?: string;
     schema?: string;
@@ -35,6 +36,7 @@ function parseArgs(argv: string[]): CliArgs {
     dryRun: args.includes("--dry-run") || args.includes("--plan") || args.includes("-n"),
     verbose: args.includes("--verbose") || args.includes("-v"),
     quiet: args.includes("--quiet") || args.includes("-q"),
+    allowDestructive: args.includes("--allow-destructive"),
     connectionString: getFlag(args, "--connection-string") || getFlag(args, "--db"),
     baseDir: getFlag(args, "--dir"),
     schema: getFlag(args, "--schema"),
@@ -62,7 +64,7 @@ function printHelp(): void {
   ${"\x1b[1m\x1b[36m"}◆ schema-flow${"\x1b[0m"} — Declarative zero-downtime PostgreSQL migrations
 
   ${"\x1b[1m"}Usage:${"\x1b[0m"}
-    schema-flow <command> [options]
+    npx @mabulu-inc/schema-flow <command> [options]
 
   ${"\x1b[1m"}Commands:${"\x1b[0m"}
     ${"\x1b[36m"}run${"\x1b[0m"}                Run all phases: pre → migrate → post
@@ -78,24 +80,35 @@ function printHelp(): void {
     ${"\x1b[36m"}help${"\x1b[0m"}               Show this help message
 
   ${"\x1b[1m"}Options:${"\x1b[0m"}
-    --dry-run, --plan, -n    Show what would be done without applying
-    --verbose, -v            Enable debug logging
-    --quiet, -q              Suppress non-essential output
+    --dry-run, --plan, -n      Show what would be done without applying
+    --allow-destructive        Allow destructive operations (column drops, type narrowing, etc.)
+    --verbose, -v              Enable debug logging
+    --quiet, -q                Suppress non-essential output
     --connection-string, --db  PostgreSQL connection string (or set DATABASE_URL)
-    --dir                    Base directory (default: current directory)
-    --schema                 PostgreSQL schema (default: public)
-    -h, --help               Show help
+    --dir                      Base directory (default: current directory)
+    --schema                   PostgreSQL schema (default: public)
+    -h, --help                 Show help
+
+  ${"\x1b[1m"}Safety:${"\x1b[0m"}
+    By default, schema-flow only performs safe, additive operations:
+      ✓ Create tables, add columns, add indexes, add constraints
+      ✓ Widen column types (integer → bigint), make columns nullable
+      ✗ Drop columns, drop tables, narrow types — ${"\x1b[33m"}blocked unless --allow-destructive${"\x1b[0m"}
+
+    Use ${"\x1b[36m"}schema-flow plan${"\x1b[0m"} to preview what would change, including blocked operations.
 
   ${"\x1b[1m"}Convention:${"\x1b[0m"}
     schema-flow expects the following directory structure:
-      schema/    Declarative table YAML files (one per table)
-      pre/       Pre-migration SQL scripts (run before schema changes)
-      post/      Post-migration SQL scripts (run after schema changes)
+      schema-flow/
+        schema/    Declarative table YAML files (one per table)
+        pre/       Pre-migration SQL scripts (run before schema changes)
+        post/      Post-migration SQL scripts (run after schema changes)
 
   ${"\x1b[1m"}Environment:${"\x1b[0m"}
-    DATABASE_URL                   PostgreSQL connection string
-    SCHEMA_FLOW_DATABASE_URL       Alternative connection string variable
-    SCHEMA_FLOW_LOG_LEVEL          Log level: debug, info, warn, error, silent
+    DATABASE_URL                       PostgreSQL connection string
+    SCHEMA_FLOW_DATABASE_URL           Alternative connection string variable
+    SCHEMA_FLOW_LOG_LEVEL              Log level: debug, info, warn, error, silent
+    SCHEMA_FLOW_ALLOW_DESTRUCTIVE      Set to "true" to allow destructive operations
 `);
 }
 
@@ -116,10 +129,7 @@ async function showStatus(config: SchemaFlowConfig): Promise<void> {
     const tracked = await tracker.getTracked(client);
 
     // Schema files
-    const schemaFiles = await glob([
-      path.join(config.schemaDir, "*.yaml"),
-      path.join(config.schemaDir, "*.yml"),
-    ]);
+    const schemaFiles = await glob([path.join(config.schemaDir, "*.yaml"), path.join(config.schemaDir, "*.yml")]);
     const schemaStatus = tracker.classifyFiles(schemaFiles, tracked, "schema");
 
     // Pre scripts
@@ -155,6 +165,14 @@ async function showStatus(config: SchemaFlowConfig): Promise<void> {
       preStatus.changedFiles.length +
       postStatus.newFiles.length +
       postStatus.changedFiles.length;
+
+    console.log("");
+
+    if (!config.allowDestructive) {
+      console.log("  Mode: \x1b[32mSafe\x1b[0m (destructive operations are blocked)");
+    } else {
+      console.log("  Mode: \x1b[33mDestructive allowed\x1b[0m (--allow-destructive is ON)");
+    }
 
     console.log("");
     if (totalPending > 0) {
@@ -218,7 +236,7 @@ async function main(): Promise<void> {
       const name = args.name || "migration";
       scaffoldPost(minimalConfig, name);
     } else {
-      logger.error('Usage: schema-flow new <pre|post> <name>');
+      logger.error("Usage: schema-flow new <pre|post> <name>");
       process.exit(1);
     }
     process.exit(0);
@@ -232,6 +250,7 @@ async function main(): Promise<void> {
       baseDir: args.flags.baseDir,
       pgSchema: args.flags.schema,
       dryRun: args.flags.dryRun || args.command === "plan",
+      allowDestructive: args.flags.allowDestructive,
     });
   } catch (err) {
     logger.error(err instanceof Error ? err.message : String(err));
@@ -261,6 +280,9 @@ async function main(): Promise<void> {
         if (!args.subcommand) {
           // Run all phases
           logger.banner(config.dryRun ? "Dry Run — All Phases" : "Running All Phases");
+          if (!config.allowDestructive) {
+            logger.info("Safe mode — destructive operations will be blocked");
+          }
           const results = await runAll(config);
           const failed = results.some((r) => !r.success);
           if (failed) exitCode = 1;
@@ -270,7 +292,8 @@ async function main(): Promise<void> {
           for (const r of results) {
             const status = r.success ? "✓" : "✗";
             const dryLabel = r.dryRun ? " (dry run)" : "";
-            logger.info(`${status} ${r.phase}: ${r.operationsExecuted} operations${dryLabel}`);
+            const blockedLabel = r.blockedDestructive > 0 ? ` (${r.blockedDestructive} destructive blocked)` : "";
+            logger.info(`${status} ${r.phase}: ${r.operationsExecuted} operations${dryLabel}${blockedLabel}`);
           }
         } else if (args.subcommand === "pre") {
           logger.banner(config.dryRun ? "Dry Run — Pre-Migration" : "Pre-Migration");
@@ -278,6 +301,9 @@ async function main(): Promise<void> {
           if (!result.success) exitCode = 1;
         } else if (args.subcommand === "migrate") {
           logger.banner(config.dryRun ? "Dry Run — Schema Migration" : "Schema Migration");
+          if (!config.allowDestructive) {
+            logger.info("Safe mode — destructive operations will be blocked");
+          }
           const result = await runMigrate(config);
           if (!result.success) exitCode = 1;
         } else if (args.subcommand === "post") {
@@ -294,13 +320,22 @@ async function main(): Promise<void> {
       case "plan": {
         logger.banner("Migration Plan (Dry Run)");
         config.dryRun = true;
+        if (!config.allowDestructive) {
+          logger.info("Safe mode — destructive operations will be shown as blocked");
+        }
         const results = await runAll(config);
         const totalOps = results.reduce((sum, r) => sum + r.operationsExecuted, 0);
+        const totalBlocked = results.reduce((sum, r) => sum + r.blockedDestructive, 0);
         logger.divider();
-        if (totalOps === 0) {
+        if (totalOps === 0 && totalBlocked === 0) {
           logger.success("No changes detected");
         } else {
-          logger.info(`${totalOps} total operations would be executed`);
+          if (totalOps > 0) {
+            logger.info(`${totalOps} total operations would be executed`);
+          }
+          if (totalBlocked > 0) {
+            logger.warn(`${totalBlocked} destructive operations blocked — use --allow-destructive to include`);
+          }
         }
         break;
       }

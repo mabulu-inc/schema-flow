@@ -1,8 +1,9 @@
 // src/planner/index.ts
 // Diff engine: compare desired YAML state with current DB state, produce SQL operations
 // Key design: CREATE TABLEs first (without FKs), then ALTER TABLEs for FKs last
+// Safety: destructive operations (drops, narrowing changes) are blocked by default
 
-import type { TableSchema, ColumnDef, ForeignKeyAction, IndexDef, CheckDef } from "../schema/types.js";
+import type { TableSchema, ColumnDef, IndexDef } from "../schema/types.js";
 import { introspectTable, getExistingTables } from "../introspect/index.js";
 import { logger } from "../core/logger.js";
 import pg from "pg";
@@ -17,6 +18,7 @@ export type OperationType =
   | "add_check"
   | "add_foreign_key"
   | "drop_foreign_key"
+  | "drop_table"
   | "create_function";
 
 export interface Operation {
@@ -25,64 +27,122 @@ export interface Operation {
   sql: string;
   description: string;
   phase: "structure" | "foreign_key";
+  /** Whether this operation is destructive (data loss, breaking change) */
+  destructive: boolean;
 }
 
 export interface MigrationPlan {
   operations: Operation[];
   structureOps: Operation[];
   foreignKeyOps: Operation[];
+  /** Destructive operations that were blocked (safe mode) */
+  blocked: Operation[];
   summary: {
     tablesToCreate: string[];
     tablesToAlter: string[];
     foreignKeysToAdd: number;
     totalOperations: number;
+    destructiveCount: number;
+    blockedCount: number;
   };
+}
+
+/** Options controlling plan behavior */
+export interface PlanOptions {
+  /** If true, destructive operations are included in the plan. Otherwise they are blocked. */
+  allowDestructive?: boolean;
 }
 
 export async function buildPlan(
   client: pg.PoolClient,
   desiredSchemas: TableSchema[],
-  pgSchema: string
+  pgSchema: string,
+  options: PlanOptions = {},
 ): Promise<MigrationPlan> {
+  const allowDestructive = options.allowDestructive ?? false;
   const existingTables = new Set(await getExistingTables(client, pgSchema));
-  const operations: Operation[] = [];
+  const desiredTableNames = new Set(desiredSchemas.map((s) => s.table));
+  const allOps: Operation[] = [];
 
   for (const desired of desiredSchemas) {
     if (!existingTables.has(desired.table)) {
       // CREATE TABLE (without foreign keys — those come later)
       const createOps = planCreateTable(desired, pgSchema);
-      operations.push(...createOps);
+      allOps.push(...createOps);
     } else {
       // ALTER TABLE — diff columns, indexes, checks
       const alterOps = await planAlterTable(client, desired, pgSchema);
-      operations.push(...alterOps);
+      allOps.push(...alterOps);
     }
   }
 
-  // Separate structure ops from FK ops
-  const structureOps = operations.filter((op) => op.phase === "structure");
-  const foreignKeyOps = operations.filter((op) => op.phase === "foreign_key");
+  // Detect tables in DB that have no corresponding schema file (orphan detection)
+  for (const existingTable of existingTables) {
+    // Skip the history table and internal PG tables
+    if (existingTable.startsWith("_schema_flow") || existingTable.startsWith("pg_")) continue;
 
-  const tablesToCreate = [...new Set(
-    operations.filter((o) => o.type === "create_table").map((o) => o.table!)
-  )];
+    if (!desiredTableNames.has(existingTable)) {
+      logger.warn(
+        `Table "${existingTable}" exists in the database but has no schema file. ` +
+          `To drop it, use --allow-destructive. To keep it, create a schema file for it ` +
+          `(run: schema-flow generate).`,
+      );
+      // We do NOT auto-generate DROP TABLE ops. The user must explicitly request that
+      // by adding a future feature or handling it in a pre/post script.
+      // This is intentional: accidentally dropping a table is catastrophic.
+    }
+  }
 
-  const tablesToAlter = [...new Set(
-    operations
-      .filter((o) => o.type !== "create_table" && o.table)
-      .map((o) => o.table!)
-      .filter((t) => !tablesToCreate.includes(t))
-  )];
+  // Separate safe from destructive, and filter blocked ops
+  const allowed: Operation[] = [];
+  const blocked: Operation[] = [];
+
+  for (const op of allOps) {
+    if (op.destructive && !allowDestructive) {
+      blocked.push(op);
+    } else {
+      allowed.push(op);
+    }
+  }
+
+  if (blocked.length > 0) {
+    logger.warn(
+      `${blocked.length} destructive operation(s) blocked (safe mode). ` + `Use --allow-destructive to apply them.`,
+    );
+    for (const op of blocked) {
+      logger.warn(`  BLOCKED: ${op.description}`);
+    }
+  }
+
+  // Separate structure ops from FK ops (only from allowed)
+  const structureOps = allowed.filter((op) => op.phase === "structure");
+  const foreignKeyOps = allowed.filter((op) => op.phase === "foreign_key");
+
+  const tablesToCreate = [...new Set(allowed.filter((o) => o.type === "create_table").map((o) => o.table!))];
+
+  const tablesToAlter = [
+    ...new Set(
+      allowed
+        .filter((o) => o.type !== "create_table" && o.table)
+        .map((o) => o.table!)
+        .filter((t) => !tablesToCreate.includes(t)),
+    ),
+  ];
+
+  const destructiveCount = allowed.filter((o) => o.destructive).length;
 
   return {
     operations: [...structureOps, ...foreignKeyOps],
     structureOps,
     foreignKeyOps,
+    blocked,
     summary: {
       tablesToCreate,
       tablesToAlter,
       foreignKeysToAdd: foreignKeyOps.length,
       totalOperations: structureOps.length + foreignKeyOps.length,
+      destructiveCount,
+      blockedCount: blocked.length,
     },
   };
 }
@@ -120,6 +180,7 @@ function planCreateTable(schema: TableSchema, pgSchema: string): Operation[] {
         sql: `ALTER TABLE "${pgSchema}"."${schema.table}" ADD CONSTRAINT "${fkName}" FOREIGN KEY ("${col.name}") REFERENCES "${pgSchema}"."${col.references.table}" ("${col.references.column}") ON DELETE ${onDelete} ON UPDATE ${onUpdate};`,
         description: `Add FK ${schema.table}.${col.name} → ${col.references.table}.${col.references.column}`,
         phase: "foreign_key",
+        destructive: false,
       });
     }
   }
@@ -137,6 +198,7 @@ function planCreateTable(schema: TableSchema, pgSchema: string): Operation[] {
     sql: createSql,
     description: `Create table ${schema.table}`,
     phase: "structure",
+    destructive: false,
   });
 
   // Indexes
@@ -157,6 +219,7 @@ function planCreateTable(schema: TableSchema, pgSchema: string): Operation[] {
         sql: `ALTER TABLE "${pgSchema}"."${schema.table}" ADD CONSTRAINT "${checkName}" CHECK (${check.expression});`,
         description: `Add check constraint on ${schema.table}: ${check.expression}`,
         phase: "structure",
+        destructive: false,
       });
     }
   }
@@ -167,11 +230,7 @@ function planCreateTable(schema: TableSchema, pgSchema: string): Operation[] {
   return ops;
 }
 
-async function planAlterTable(
-  client: pg.PoolClient,
-  desired: TableSchema,
-  pgSchema: string
-): Promise<Operation[]> {
+async function planAlterTable(client: pg.PoolClient, desired: TableSchema, pgSchema: string): Promise<Operation[]> {
   const ops: Operation[] = [];
   const current = await introspectTable(client, desired.table, pgSchema);
 
@@ -188,6 +247,7 @@ async function planAlterTable(
         sql: addSql,
         description: `Add column ${desired.table}.${col.name}`,
         phase: "structure",
+        destructive: false,
       });
 
       // FK for new column
@@ -201,6 +261,7 @@ async function planAlterTable(
           sql: `ALTER TABLE "${pgSchema}"."${desired.table}" ADD CONSTRAINT "${fkName}" FOREIGN KEY ("${col.name}") REFERENCES "${pgSchema}"."${col.references.table}" ("${col.references.column}") ON DELETE ${onDelete} ON UPDATE ${onUpdate};`,
           description: `Add FK ${desired.table}.${col.name} → ${col.references.table}.${col.references.column}`,
           phase: "foreign_key",
+          destructive: false,
         });
       }
 
@@ -213,7 +274,7 @@ async function planAlterTable(
     ops.push(...alterOps);
   }
 
-  // Drop columns that are no longer in the schema
+  // Columns in DB but NOT in the desired schema → destructive drop
   for (const existingCol of current.columns) {
     if (!desiredColMap.has(existingCol.name)) {
       ops.push({
@@ -222,6 +283,7 @@ async function planAlterTable(
         sql: `ALTER TABLE "${pgSchema}"."${desired.table}" DROP COLUMN "${existingCol.name}";`,
         description: `Drop column ${desired.table}.${existingCol.name}`,
         phase: "structure",
+        destructive: true,
       });
     }
   }
@@ -229,12 +291,7 @@ async function planAlterTable(
   return ops;
 }
 
-function planAlterColumn(
-  tableName: string,
-  existing: ColumnDef,
-  desired: ColumnDef,
-  pgSchema: string
-): Operation[] {
+function planAlterColumn(tableName: string, existing: ColumnDef, desired: ColumnDef, pgSchema: string): Operation[] {
   const ops: Operation[] = [];
   const qualifiedTable = `"${pgSchema}"."${tableName}"`;
 
@@ -242,35 +299,44 @@ function planAlterColumn(
   if (normalizeType(existing.type) !== normalizeType(desired.type)) {
     // Skip type change for serial types (they're just integer + sequence)
     if (!isSerialType(desired.type) || !isIntegerType(existing.type)) {
+      // Classify: widening is safe, narrowing is destructive
+      const narrowing = isNarrowingTypeChange(existing.type, desired.type);
       ops.push({
         type: "alter_column",
         table: tableName,
         sql: `ALTER TABLE ${qualifiedTable} ALTER COLUMN "${desired.name}" TYPE ${desired.type} USING "${desired.name}"::${desired.type};`,
         description: `Change type of ${tableName}.${desired.name}: ${existing.type} → ${desired.type}`,
         phase: "structure",
+        destructive: narrowing,
       });
     }
   }
 
   // Nullable change
-  const existingNullable = existing.nullable !== false;
+  // Convention: columns are NOT NULL by default.
+  // nullable=true means nullable; nullable=undefined or nullable=false means NOT NULL.
+  const existingNullable = existing.nullable === true;
   const desiredNullable = desired.nullable === true;
   if (existingNullable !== desiredNullable && !desired.primary_key) {
     if (desiredNullable) {
+      // Making a column nullable is safe (widening)
       ops.push({
         type: "alter_column",
         table: tableName,
         sql: `ALTER TABLE ${qualifiedTable} ALTER COLUMN "${desired.name}" DROP NOT NULL;`,
         description: `Make ${tableName}.${desired.name} nullable`,
         phase: "structure",
+        destructive: false,
       });
     } else {
+      // Making a column NOT NULL is destructive (can fail if NULLs exist)
       ops.push({
         type: "alter_column",
         table: tableName,
         sql: `ALTER TABLE ${qualifiedTable} ALTER COLUMN "${desired.name}" SET NOT NULL;`,
         description: `Make ${tableName}.${desired.name} NOT NULL`,
         phase: "structure",
+        destructive: true,
       });
     }
   }
@@ -283,6 +349,7 @@ function planAlterColumn(
       sql: `ALTER TABLE ${qualifiedTable} ALTER COLUMN "${desired.name}" SET DEFAULT ${desired.default};`,
       description: `Set default for ${tableName}.${desired.name}: ${desired.default}`,
       phase: "structure",
+      destructive: false,
     });
   } else if (desired.default === undefined && existing.default !== undefined) {
     ops.push({
@@ -291,6 +358,7 @@ function planAlterColumn(
       sql: `ALTER TABLE ${qualifiedTable} ALTER COLUMN "${desired.name}" DROP DEFAULT;`,
       description: `Drop default for ${tableName}.${desired.name}`,
       phase: "structure",
+      destructive: false,
     });
   }
 
@@ -309,6 +377,7 @@ function planCreateIndex(tableName: string, idx: IndexDef, pgSchema: string): Op
     sql: `CREATE ${unique}INDEX CONCURRENTLY IF NOT EXISTS "${idxName}" ON "${pgSchema}"."${tableName}" (${cols})${where};`,
     description: `Create ${unique ? "unique " : ""}index ${idxName} on ${tableName}`,
     phase: "structure",
+    destructive: false,
   };
 }
 
@@ -319,6 +388,44 @@ function buildAddColumnSql(tableName: string, col: ColumnDef, pgSchema: string):
   if (col.default !== undefined) sql += ` DEFAULT ${col.default}`;
   sql += ";";
   return sql;
+}
+
+/**
+ * Determine if a type change is narrowing (potential data loss).
+ * Widening changes (int→bigint, varchar(50)→varchar(255)) are safe.
+ * Narrowing changes (bigint→int, varchar(255)→varchar(50), text→integer) are destructive.
+ */
+function isNarrowingTypeChange(from: string, to: string): boolean {
+  const fromNorm = normalizeType(from).toLowerCase();
+  const toNorm = normalizeType(to).toLowerCase();
+
+  // Same normalized type → check size parameters
+  if (fromNorm === toNorm) return false;
+
+  // varchar(N) → varchar(M): narrowing if M < N
+  const fromVarchar = fromNorm.match(/^varchar\((\d+)\)$/);
+  const toVarchar = toNorm.match(/^varchar\((\d+)\)$/);
+  if (fromVarchar && toVarchar) {
+    return parseInt(toVarchar[1]) < parseInt(fromVarchar[1]);
+  }
+
+  // Known safe widenings
+  const widenings: [string, string][] = [
+    ["smallint", "integer"],
+    ["smallint", "bigint"],
+    ["integer", "bigint"],
+    ["real", "double precision"],
+    ["varchar", "text"],
+  ];
+
+  for (const [narrow, wide] of widenings) {
+    // Also handle varchar(N) → text
+    if ((fromNorm === narrow || fromNorm.startsWith(`${narrow}(`)) && toNorm === wide) return false;
+    if (fromNorm === wide && (toNorm === narrow || toNorm.startsWith(`${narrow}(`))) return true;
+  }
+
+  // Any other type change is considered narrowing (conservative)
+  return true;
 }
 
 function normalizeType(t: string): string {

@@ -5,15 +5,16 @@
 Schema-flow takes your database where it needs to be. Define the desired end state in YAML, and it figures out what changes are required. Pre- and post-migration SQL scripts handle everything else — column renames, data backfills, seed data, grants.
 
 ```
-pnpm exec schema-flow plan     # see what would change
-pnpm exec schema-flow run      # apply pre → migrate → post
+npx @mabulu-inc/schema-flow plan     # see what would change
+npx @mabulu-inc/schema-flow run      # apply pre → migrate → post
 ```
 
 ## Why schema-flow?
 
 - **Declarative tables** — Define the desired end state in YAML. Schema-flow figures out the diff.
-- **Zero new dependencies for your team** — Just `pnpm add -D @mabulu-inc/schema-flow` and go. No Java, no Go binary, no Docker requirement.
-- **Convention over configuration** — Drop files in `schema/`, `pre/`, `post/`. That's it.
+- **Safe by default** — Only additive operations run unless you explicitly opt in to destructive changes with `--allow-destructive`.
+- **Zero new dependencies for your team** — Run via `npx` (or `pnpx`). No install step, no Java, no Go binary, no Docker requirement.
+- **Convention over configuration** — Drop files in `schema-flow/schema/`, `schema-flow/pre/`, `schema-flow/post/`. That's it.
 - **Surgical change detection** — filepath + SHA-256 hash tracking means only new or changed files are processed.
 - **Safe FK ordering** — Tables are created first (without foreign keys), then all FKs are added after every table exists.
 - **CI/CD ready** — Non-zero exit codes on failure, structured logging, `--quiet` mode for pipelines.
@@ -21,34 +22,26 @@ pnpm exec schema-flow run      # apply pre → migrate → post
 - **Phase control** — Run `pre`, `migrate`, `post` independently or all at once.
 - **Generate from existing DB** — Bootstrap your schema files from a live database with `schema-flow generate`.
 
-## Install
-
-```bash
-pnpm add -D @mabulu-inc/schema-flow
-
-# or
-npm install --save-dev @mabulu-inc/schema-flow
-```
-
 ## Quick Start
 
 ### 1. Initialize the directory structure
 
 ```bash
-pnpm exec schema-flow init
+npx @mabulu-inc/schema-flow init
 ```
 
 This creates:
 
 ```
-schema/     ← Declarative YAML table definitions (one file per table)
-pre/        ← Pre-migration SQL scripts (run before schema changes)
-post/       ← Post-migration SQL scripts (run after schema changes)
+schema-flow/
+  schema/     ← Declarative YAML table definitions (one file per table)
+  pre/        ← Pre-migration SQL scripts (run before schema changes)
+  post/       ← Post-migration SQL scripts (run after schema changes)
 ```
 
 ### 2. Define your tables
 
-**schema/users.yaml**
+**schema-flow/schema/users.yaml**
 
 ```yaml
 table: users
@@ -74,7 +67,7 @@ columns:
     default: now()
 ```
 
-**schema/posts.yaml**
+**schema-flow/schema/posts.yaml**
 
 ```yaml
 table: posts
@@ -112,20 +105,20 @@ export DATABASE_URL="postgresql://user:pass@localhost:5432/mydb"
 ### 4. Preview changes
 
 ```bash
-pnpm exec schema-flow plan
+npx @mabulu-inc/schema-flow plan
 ```
 
 ### 5. Apply
 
 ```bash
-pnpm exec schema-flow run
+npx @mabulu-inc/schema-flow run
 ```
 
 ## Commands
 
 | Command | Description |
 | --- | --- |
-| `schema-flow init` | Create `schema/`, `pre/`, `post/` directories |
+| `schema-flow init` | Create `schema-flow/` directory with `schema/`, `pre/`, `post/` subdirectories |
 | `schema-flow plan` | Show what would be done (dry run) |
 | `schema-flow run` | Run all phases: pre → migrate → post |
 | `schema-flow run pre` | Run only pre-migration scripts |
@@ -137,16 +130,61 @@ pnpm exec schema-flow run
 | `schema-flow new post <name>` | Scaffold a timestamped post-migration script |
 | `schema-flow help` | Show help |
 
+All commands are invoked via `npx` (or `pnpx`):
+
+```bash
+npx @mabulu-inc/schema-flow <command> [options]
+```
+
 ## Options
 
 | Flag | Description |
 | --- | --- |
 | `--dry-run`, `--plan`, `-n` | Preview without applying |
+| `--allow-destructive` | Allow destructive operations (column drops, type narrowing, SET NOT NULL) |
 | `--verbose`, `-v` | Debug-level logging |
 | `--quiet`, `-q` | Suppress non-essential output |
 | `--connection-string`, `--db` | PostgreSQL connection string |
 | `--dir` | Base directory (default: cwd) |
 | `--schema` | PostgreSQL schema (default: `public`) |
+
+## Safe by Default
+
+Schema-flow is designed for zero-downtime deployments. By default, it only performs safe, additive operations:
+
+| Operation | Safe | Requires `--allow-destructive` |
+| --- | --- | --- |
+| Create table | ✓ | |
+| Add column | ✓ | |
+| Add index (CONCURRENTLY) | ✓ | |
+| Add foreign key | ✓ | |
+| Add check constraint | ✓ | |
+| Widen type (int → bigint) | ✓ | |
+| Make column nullable | ✓ | |
+| Set / change default | ✓ | |
+| Drop column | | ✓ |
+| Narrow type (bigint → int) | | ✓ |
+| Make column NOT NULL | | ✓ |
+
+If a column exists in the database but is missing from the schema YAML, schema-flow will **not** drop it unless `--allow-destructive` is set. Instead, it logs a warning and skips the drop.
+
+Use `schema-flow plan` to preview which operations would be applied and which would be blocked:
+
+```bash
+# See what's safe and what's blocked
+npx @mabulu-inc/schema-flow plan
+
+# See everything, including destructive operations
+npx @mabulu-inc/schema-flow plan --allow-destructive
+
+# Apply only safe changes
+npx @mabulu-inc/schema-flow run
+
+# Apply everything (use with caution)
+npx @mabulu-inc/schema-flow run --allow-destructive
+```
+
+For column renames and other inherently destructive operations, use a procedural pre-migration script instead of modifying the YAML.
 
 ## Schema YAML Reference
 
@@ -207,11 +245,11 @@ For operations that can't be expressed declaratively — column renames, data mi
 ### Scaffold a script
 
 ```bash
-pnpm exec schema-flow new pre rename_user_email
-# → pre/20260228153000_rename_user_email.sql
+npx @mabulu-inc/schema-flow new pre rename_user_email
+# → schema-flow/pre/20260228153000_rename_user_email.sql
 
-pnpm exec schema-flow new post seed_roles
-# → post/20260228153005_seed_roles.sql
+npx @mabulu-inc/schema-flow new post seed_roles
+# → schema-flow/post/20260228153005_seed_roles.sql
 ```
 
 Scripts are executed in alphabetical order. The UTC timestamp prefix ensures correct ordering.
@@ -219,7 +257,7 @@ Scripts are executed in alphabetical order. The UTC timestamp prefix ensures cor
 ### Example pre-migration script
 
 ```sql
--- pre/20260228153000_rename_user_email.sql
+-- schema-flow/pre/20260228153000_rename_user_email.sql
 BEGIN;
 ALTER TABLE "public"."users" RENAME COLUMN "name" TO "display_name";
 COMMIT;
@@ -228,7 +266,7 @@ COMMIT;
 ### Example post-migration script
 
 ```sql
--- post/20260228160000_seed_roles.sql
+-- schema-flow/post/20260228160000_seed_roles.sql
 BEGIN;
 INSERT INTO "public"."roles" (name) VALUES ('admin'), ('editor'), ('viewer')
 ON CONFLICT (name) DO NOTHING;
@@ -240,10 +278,10 @@ COMMIT;
 Bootstrap your schema files from a live database:
 
 ```bash
-pnpm exec schema-flow generate --db "postgresql://user:pass@localhost:5432/mydb"
+npx @mabulu-inc/schema-flow generate --db "postgresql://user:pass@localhost:5432/mydb"
 ```
 
-This introspects every table and function in the `public` schema and writes a YAML file for each one into `schema/`.
+This introspects every table and function in the `public` schema and writes a YAML file for each one into `schema-flow/schema/`.
 
 ## Change Tracking
 
@@ -269,7 +307,7 @@ This ensures tables exist before they're referenced, regardless of file order.
 ```yaml
 # GitHub Actions example
 - name: Run database migrations
-  run: pnpm exec schema-flow run --quiet
+  run: npx @mabulu-inc/schema-flow run --quiet
   env:
     DATABASE_URL: ${{ secrets.DATABASE_URL }}
 ```
@@ -280,8 +318,28 @@ Schema-flow exits with code `1` on any failure, making it safe for pipelines. Us
 
 ```yaml
 - name: Preview migrations
-  run: pnpm exec schema-flow plan --quiet
+  run: npx @mabulu-inc/schema-flow plan --quiet
 ```
+
+## Directory Structure
+
+schema-flow looks for a `schema-flow/` directory in the current working directory (or the directory specified with `--dir`):
+
+```
+my-project/
+  schema-flow/
+    schema/         ← One YAML file per table
+      users.yaml
+      posts.yaml
+    pre/            ← Pre-migration SQL scripts
+      20260228153000_rename_column.sql
+    post/           ← Post-migration SQL scripts
+      20260228160000_seed_roles.sql
+  src/
+  package.json
+```
+
+Run all commands from your project root — schema-flow automatically finds the `schema-flow/` folder.
 
 ## Environment Variables
 
@@ -290,6 +348,7 @@ Schema-flow exits with code `1` on any failure, making it safe for pipelines. Us
 | `DATABASE_URL` | PostgreSQL connection string |
 | `SCHEMA_FLOW_DATABASE_URL` | Alternative connection string (takes precedence) |
 | `SCHEMA_FLOW_LOG_LEVEL` | `debug`, `info`, `warn`, `error`, `silent` |
+| `SCHEMA_FLOW_ALLOW_DESTRUCTIVE` | Set to `true` to allow destructive operations (same as `--allow-destructive`) |
 
 ## Programmatic API
 

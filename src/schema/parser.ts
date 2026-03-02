@@ -37,8 +37,16 @@ export function parseTableFile(filePath: string): TableSchema {
         ? {
             table: (col.references as Record<string, string>).table,
             column: (col.references as Record<string, string>).column,
-            on_delete: (col.references as Record<string, string>).on_delete as ColumnDef["references"] extends { on_delete?: infer T } ? T : never,
-            on_update: (col.references as Record<string, string>).on_update as ColumnDef["references"] extends { on_update?: infer T } ? T : never,
+            on_delete: (col.references as Record<string, string>).on_delete as ColumnDef["references"] extends {
+              on_delete?: infer T;
+            }
+              ? T
+              : never,
+            on_update: (col.references as Record<string, string>).on_update as ColumnDef["references"] extends {
+              on_update?: infer T;
+            }
+              ? T
+              : never,
           }
         : undefined,
     };

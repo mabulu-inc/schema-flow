@@ -45,7 +45,7 @@ export class FileTracker {
   /** Get all tracked files from the database */
   async getTracked(client: pg.PoolClient): Promise<Map<string, TrackedFile>> {
     const res = await client.query<TrackedFile>(
-      `SELECT file_path, file_hash, phase, applied_at::text FROM ${this.table}`
+      `SELECT file_path, file_hash, phase, applied_at::text FROM ${this.table}`,
     );
     const map = new Map<string, TrackedFile>();
     for (const row of res.rows) {
@@ -58,7 +58,7 @@ export class FileTracker {
   classifyFiles(
     filePaths: string[],
     tracked: Map<string, TrackedFile>,
-    phase: "pre" | "schema" | "post"
+    _phase: "pre" | "schema" | "post",
   ): { newFiles: string[]; changedFiles: string[]; unchangedFiles: string[] } {
     const newFiles: string[] = [];
     const changedFiles: string[] = [];
@@ -81,18 +81,14 @@ export class FileTracker {
   }
 
   /** Record a file as applied */
-  async recordFile(
-    client: pg.PoolClient,
-    filePath: string,
-    phase: "pre" | "schema" | "post"
-  ): Promise<void> {
+  async recordFile(client: pg.PoolClient, filePath: string, phase: "pre" | "schema" | "post"): Promise<void> {
     const hash = this.hashFile(filePath);
     await client.query(
       `INSERT INTO ${this.table} (file_path, file_hash, phase)
        VALUES ($1, $2, $3)
        ON CONFLICT (file_path) DO UPDATE
        SET file_hash = EXCLUDED.file_hash, applied_at = now()`,
-      [filePath, hash, phase]
+      [filePath, hash, phase],
     );
   }
 }

@@ -2,8 +2,7 @@
 // Introspect the current PostgreSQL database state
 
 import pg from "pg";
-import type { TableSchema, ColumnDef, IndexDef, ForeignKeyAction } from "../schema/types.js";
-import { logger } from "../core/logger.js";
+import type { TableSchema, ColumnDef } from "../schema/types.js";
 
 export interface DbColumn {
   column_name: string;
@@ -41,25 +40,18 @@ export interface DbFunction {
 }
 
 /** Get all user tables in the schema */
-export async function getExistingTables(
-  client: pg.PoolClient,
-  pgSchema: string
-): Promise<string[]> {
+export async function getExistingTables(client: pg.PoolClient, pgSchema: string): Promise<string[]> {
   const res = await client.query(
     `SELECT table_name FROM information_schema.tables
      WHERE table_schema = $1 AND table_type = 'BASE TABLE'
      ORDER BY table_name`,
-    [pgSchema]
+    [pgSchema],
   );
   return res.rows.map((r) => r.table_name);
 }
 
 /** Get columns for a specific table */
-export async function getTableColumns(
-  client: pg.PoolClient,
-  tableName: string,
-  pgSchema: string
-): Promise<DbColumn[]> {
+export async function getTableColumns(client: pg.PoolClient, tableName: string, pgSchema: string): Promise<DbColumn[]> {
   const res = await client.query<DbColumn>(
     `SELECT
        column_name,
@@ -73,7 +65,7 @@ export async function getTableColumns(
      FROM information_schema.columns
      WHERE table_schema = $1 AND table_name = $2
      ORDER BY ordinal_position`,
-    [pgSchema, tableName]
+    [pgSchema, tableName],
   );
   return res.rows;
 }
@@ -82,7 +74,7 @@ export async function getTableColumns(
 export async function getTableConstraints(
   client: pg.PoolClient,
   tableName: string,
-  pgSchema: string
+  pgSchema: string,
 ): Promise<DbConstraint[]> {
   const res = await client.query<DbConstraint>(
     `SELECT
@@ -120,22 +112,18 @@ export async function getTableConstraints(
      LEFT JOIN pg_attribute fa ON fa.attrelid = ft.oid AND fa.attnum = fk.attnum
      WHERE n.nspname = $1 AND t.relname = $2
      ORDER BY c.conname, ak.ord`,
-    [pgSchema, tableName]
+    [pgSchema, tableName],
   );
   return res.rows;
 }
 
 /** Get indexes for a table */
-export async function getTableIndexes(
-  client: pg.PoolClient,
-  tableName: string,
-  pgSchema: string
-): Promise<DbIndex[]> {
+export async function getTableIndexes(client: pg.PoolClient, tableName: string, pgSchema: string): Promise<DbIndex[]> {
   const res = await client.query<DbIndex>(
     `SELECT indexname, indexdef
      FROM pg_indexes
      WHERE schemaname = $1 AND tablename = $2`,
-    [pgSchema, tableName]
+    [pgSchema, tableName],
   );
   return res.rows;
 }
@@ -144,7 +132,7 @@ export async function getTableIndexes(
 export async function introspectTable(
   client: pg.PoolClient,
   tableName: string,
-  pgSchema: string
+  pgSchema: string,
 ): Promise<TableSchema> {
   const dbCols = await getTableColumns(client, tableName, pgSchema);
   const dbConstraints = await getTableConstraints(client, tableName, pgSchema);
@@ -196,8 +184,12 @@ export async function introspectTable(
         def.references = {
           table: fkCols[0].foreign_table_name!,
           column: fkCols[0].foreign_column_name!,
-          on_delete: (fkCols[0].delete_rule || "NO ACTION") as ColumnDef["references"] extends { on_delete?: infer T } ? T : never,
-          on_update: (fkCols[0].update_rule || "NO ACTION") as ColumnDef["references"] extends { on_update?: infer T } ? T : never,
+          on_delete: (fkCols[0].delete_rule || "NO ACTION") as ColumnDef["references"] extends { on_delete?: infer T }
+            ? T
+            : never,
+          on_update: (fkCols[0].update_rule || "NO ACTION") as ColumnDef["references"] extends { on_update?: infer T }
+            ? T
+            : never,
         };
       }
     }
@@ -218,10 +210,7 @@ export async function introspectTable(
 }
 
 /** Get all functions in the schema */
-export async function getExistingFunctions(
-  client: pg.PoolClient,
-  pgSchema: string
-): Promise<DbFunction[]> {
+export async function getExistingFunctions(client: pg.PoolClient, pgSchema: string): Promise<DbFunction[]> {
   const res = await client.query<DbFunction>(
     `SELECT
        r.routine_name,
@@ -241,14 +230,14 @@ export async function getExistingFunctions(
        AND r.routine_name NOT LIKE 'pg_%'
      GROUP BY r.routine_name, r.routine_type, r.data_type, r.external_language, r.routine_definition
      ORDER BY r.routine_name`,
-    [pgSchema]
+    [pgSchema],
   );
   return res.rows;
 }
 
 /** Resolve a column type from information_schema to a user-friendly string */
 function resolveColumnType(col: DbColumn): string {
-  const { udt_name, data_type, character_maximum_length, numeric_precision, numeric_scale } = col;
+  const { udt_name, character_maximum_length, numeric_precision, numeric_scale } = col;
 
   // Handle serial types via column_default
   if (col.column_default?.startsWith("nextval(")) {

@@ -4,21 +4,20 @@
 import { writeFileSync, mkdirSync, existsSync } from "node:fs";
 import path from "node:path";
 import { stringify as toYaml } from "yaml";
-import pg from "pg";
 import type { SchemaFlowConfig } from "../core/config.js";
-import type { TableSchema, ColumnDef } from "../schema/types.js";
-import {
-  getExistingTables,
-  introspectTable,
-  getExistingFunctions,
-} from "../introspect/index.js";
+import type { TableSchema } from "../schema/types.js";
+import { getExistingTables, introspectTable, getExistingFunctions } from "../introspect/index.js";
 import { withClient } from "../core/db.js";
 import { logger } from "../core/logger.js";
 
 /** Generate a UTC timestamp string for filenames: YYYYMMDDHHMMSS */
 function utcTimestamp(): string {
   const now = new Date();
-  return now.toISOString().replace(/[-:T]/g, "").replace(/\.\d+Z/, "").slice(0, 14);
+  return now
+    .toISOString()
+    .replace(/[-:T]/g, "")
+    .replace(/\.\d+Z/, "")
+    .slice(0, 14);
 }
 
 /** Scaffold a pre-migration SQL script */
@@ -86,7 +85,9 @@ export async function generateFromDb(config: SchemaFlowConfig): Promise<string[]
     logger.info(`Found ${tables.length} tables in schema "${config.pgSchema}"`);
 
     // Filter out the schema-flow history table
-    const userTables = tables.filter((t) => t !== config.historyTable.replace(/^_/, "").replace(/_/g, "_") && t !== config.historyTable);
+    const userTables = tables.filter(
+      (t) => t !== config.historyTable.replace(/^_/, "").replace(/_/g, "_") && t !== config.historyTable,
+    );
 
     for (const tableName of userTables) {
       const schema = await introspectTable(client, tableName, config.pgSchema);
@@ -165,7 +166,13 @@ function tableSchemaToYaml(schema: TableSchema): string {
 }
 
 /** Convert a DB function to YAML */
-function functionToYaml(fn: { routine_name: string; external_language: string; data_type: string; routine_definition: string; parameter_list: string }): string {
+function functionToYaml(fn: {
+  routine_name: string;
+  external_language: string;
+  data_type: string;
+  routine_definition: string;
+  parameter_list: string;
+}): string {
   const obj = {
     name: fn.routine_name,
     language: fn.external_language?.toLowerCase() || "plpgsql",
@@ -180,16 +187,17 @@ function functionToYaml(fn: { routine_name: string; external_language: string; d
 
 /** Scaffold the conventional directory structure */
 export function scaffoldInit(baseDir: string): void {
+  const sfDir = path.join(baseDir, "schema-flow");
   const dirs = ["schema", "pre", "post"];
   for (const dir of dirs) {
-    const fullPath = path.join(baseDir, dir);
+    const fullPath = path.join(sfDir, dir);
     ensureDir(fullPath);
     logger.success(`Created directory: ${fullPath}`);
   }
 
   // Create .gitkeep files so empty dirs are tracked
   for (const dir of dirs) {
-    const gitkeepPath = path.join(baseDir, dir, ".gitkeep");
+    const gitkeepPath = path.join(sfDir, dir, ".gitkeep");
     if (!existsSync(gitkeepPath)) {
       writeFileSync(gitkeepPath, "", "utf-8");
     }
