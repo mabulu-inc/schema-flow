@@ -121,6 +121,7 @@ npx @mabulu-inc/schema-flow run
 | --- | --- |
 | `schema-flow init` | Create `schema-flow/` directory with `schema/`, `pre/`, `post/` subdirectories |
 | `schema-flow plan` | Show what would be done (dry run) |
+| `schema-flow validate` | Validate schema against a live database (executes in a transaction, always rolls back) |
 | `schema-flow run` | Run all phases: pre → migrate → post |
 | `schema-flow run pre` | Run only pre-migration scripts |
 | `schema-flow run migrate` | Run only declarative schema migration |
@@ -197,6 +198,8 @@ npx @mabulu-inc/schema-flow run --allow-destructive
 ```
 
 For column renames and other inherently destructive operations, use a procedural pre-migration script instead of modifying the YAML.
+
+> **`plan` vs `validate`**: `plan` generates and displays the SQL but never sends it to PostgreSQL. `validate` executes the SQL inside a transaction that always rolls back — Postgres itself checks syntax, references, and types, catching errors that `plan` cannot.
 
 ## Schema YAML Reference
 

@@ -6,7 +6,7 @@ import { createRequire } from "node:module";
 import { resolveConfig, validateDirectories, type SchemaFlowConfig } from "../core/config.js";
 import { logger, LogLevel } from "../core/logger.js";
 import { testConnection, closePool } from "../core/db.js";
-import { runAll, runPre, runMigrate, runPost } from "../executor/index.js";
+import { runAll, runPre, runMigrate, runPost, runValidate } from "../executor/index.js";
 import { scaffoldPre, scaffoldPost, generateFromDb, scaffoldInit } from "../scaffold/index.js";
 
 const require = createRequire(import.meta.url);
@@ -78,6 +78,7 @@ function printHelp(): void {
     ${"\x1b[36m"}run migrate${"\x1b[0m"}         Run only declarative schema migration
     ${"\x1b[36m"}run post${"\x1b[0m"}            Run only post-migration scripts
     ${"\x1b[36m"}plan${"\x1b[0m"}               Show what would be done without applying (alias for run --dry-run)
+    ${"\x1b[36m"}validate${"\x1b[0m"}           Validate schema against a live database (dry run with rollback)
     ${"\x1b[36m"}generate${"\x1b[0m"}            Generate schema files from existing database
     ${"\x1b[36m"}new pre <name>${"\x1b[0m"}      Scaffold a new pre-migration script
     ${"\x1b[36m"}new post <name>${"\x1b[0m"}     Scaffold a new post-migration script
@@ -361,6 +362,20 @@ async function main(): Promise<void> {
           if (totalBlocked > 0) {
             logger.warn(`${totalBlocked} destructive operations blocked — use --allow-destructive to include`);
           }
+        }
+        break;
+      }
+
+      case "validate": {
+        logger.banner("Validating Schema");
+        const result = await runValidate(config);
+        if (result.valid) {
+          logger.success(`Validation passed — ${result.operationsChecked} operation(s) checked`);
+        } else {
+          for (const err of result.errors) {
+            logger.error(err);
+          }
+          exitCode = 1;
         }
         break;
       }

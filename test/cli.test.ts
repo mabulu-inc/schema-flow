@@ -251,6 +251,67 @@ columns:
         expect(cols).toContain("name");
       });
     });
+
+    describe("validate", () => {
+      it("exits 0 and shows passed for valid schema", () => {
+        writeSchema(
+          ctx.project.schemaDir,
+          "users.yaml",
+          `table: users
+columns:
+  - name: id
+    type: serial
+    primary_key: true
+  - name: email
+    type: varchar(255)
+`,
+        );
+
+        const output = run(`validate --dir ${ctx.project.baseDir}`, {
+          DATABASE_URL: ctx.connectionString,
+        });
+
+        expect(output).toContain("passed");
+      });
+
+      it("exits 1 for schema with bad SQL", () => {
+        writeSchema(
+          ctx.project.schemaDir,
+          "orders.yaml",
+          `table: orders
+rls: true
+columns:
+  - name: id
+    type: serial
+    primary_key: true
+  - name: user_id
+    type: integer
+policies:
+  - name: bad_policy
+    for: SELECT
+    using: "user_id = nonexistent_function()"
+`,
+        );
+
+        let exitCode = 0;
+        let output = "";
+        try {
+          execSync(`node ${CLI} validate --dir ${ctx.project.baseDir}`, {
+            encoding: "utf-8",
+            env: { ...process.env, DATABASE_URL: ctx.connectionString },
+            timeout: 30000,
+            stdio: ["pipe", "pipe", "pipe"],
+          });
+        } catch (err: unknown) {
+          const e = err as { stdout?: string; stderr?: string; status?: number };
+          exitCode = e.status || 1;
+          output = (e.stdout || "") + (e.stderr || "");
+        }
+
+        expect(exitCode).toBe(1);
+        expect(output).toContain("nonexistent_function");
+      });
+    });
   });
 
   describe("error handling", () => {

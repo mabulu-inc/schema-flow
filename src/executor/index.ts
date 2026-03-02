@@ -26,6 +26,12 @@ export interface ExecutionResult {
   blockedDestructive: number;
 }
 
+export interface ValidationResult {
+  valid: boolean;
+  errors: string[];
+  operationsChecked: number;
+}
+
 /** Discover and sort SQL scripts in a directory */
 async function discoverScripts(dir: string): Promise<string[]> {
   const patterns = ["*.sql"];
@@ -318,6 +324,121 @@ export async function runMigrate(config: SchemaFlowConfig): Promise<ExecutionRes
       dryRun: false,
       blockedDestructive: plan.blocked.length,
     };
+  });
+}
+
+/** Validate schema against a live database (executes in a transaction, always rolls back) */
+export async function runValidate(config: SchemaFlowConfig): Promise<ValidationResult> {
+  logger.step("VALIDATE", "Validating schema against database");
+  const errors: string[] = [];
+  let opsChecked = 0;
+
+  const schemaFiles = await discoverSchemaFiles(config.schemaDir);
+  if (schemaFiles.length === 0) {
+    logger.info("No schema files found — nothing to validate");
+    return { valid: true, errors: [], operationsChecked: 0 };
+  }
+
+  // Separate function files from table files
+  const functionFiles = schemaFiles.filter((f) => path.basename(f).startsWith("fn_"));
+  const tableFiles = schemaFiles.filter((f) => !path.basename(f).startsWith("fn_"));
+
+  // Parse function files
+  const parsedFunctions: FunctionSchema[] = [];
+  for (const f of functionFiles) {
+    try {
+      parsedFunctions.push(parseFunctionFile(f));
+    } catch (err) {
+      const msg = `Failed to parse function ${f}: ${err instanceof Error ? err.message : String(err)}`;
+      errors.push(msg);
+      logger.error(msg);
+    }
+  }
+
+  if (errors.length > 0) {
+    return { valid: false, errors, operationsChecked: 0 };
+  }
+
+  // Parse ALL table schema files
+  const allSchemas = tableFiles
+    .map((f) => {
+      try {
+        return parseTableFile(f);
+      } catch (err) {
+        const msg = `Failed to parse ${f}: ${err instanceof Error ? err.message : String(err)}`;
+        errors.push(msg);
+        logger.error(msg);
+        return null;
+      }
+    })
+    .filter(Boolean) as Awaited<ReturnType<typeof parseTableFile>>[];
+
+  if (errors.length > 0) {
+    return { valid: false, errors, operationsChecked: 0 };
+  }
+
+  // Expand mixins
+  const mixinMap = await loadMixins(config.mixinsDir);
+  const expandedSchemas = expandMixins(allSchemas, mixinMap);
+
+  return await withClient(config.connectionString, async (client) => {
+    // Build plan with allowDestructive: true so all operations are validated
+    const plan = await buildPlan(client, expandedSchemas, config.pgSchema, {
+      allowDestructive: true,
+    });
+
+    const allOps = [...plan.structureOps, ...plan.foreignKeyOps];
+
+    if (parsedFunctions.length === 0 && allOps.length === 0) {
+      logger.success("Schema is valid — no operations to check");
+      return { valid: true, errors: [], operationsChecked: 0 };
+    }
+
+    // Execute everything inside a single transaction that always rolls back
+    try {
+      await client.query("BEGIN");
+
+      // Functions first
+      for (const fn of parsedFunctions) {
+        const replaceClause = fn.replace ? "OR REPLACE " : "";
+        const argsClause = fn.args ? `(${fn.args})` : "()";
+        const securityClause = fn.security === "definer" ? " SECURITY DEFINER" : "";
+        const sql = `CREATE ${replaceClause}FUNCTION ${fn.name}${argsClause} RETURNS ${fn.returns} LANGUAGE ${fn.language}${securityClause} AS $fn_body$\n${fn.body}\n$fn_body$;`;
+        logger.debug(`Validating function: ${fn.name}`);
+        await client.query(sql);
+        opsChecked++;
+      }
+
+      // Structure ops — strip CONCURRENTLY from index SQL (can't run inside a transaction)
+      for (const op of plan.structureOps) {
+        const sql = op.sql.replace(/\bCONCURRENTLY\s+/gi, "");
+        logger.debug(`Validating: ${op.description}`);
+        await client.query(sql);
+        opsChecked++;
+      }
+
+      // FK ops
+      for (const op of plan.foreignKeyOps) {
+        logger.debug(`Validating: ${op.description}`);
+        await client.query(op.sql);
+        opsChecked++;
+      }
+
+      // Always roll back — validation only
+      await client.query("ROLLBACK");
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      errors.push(msg);
+      logger.error(`Validation failed: ${msg}`);
+      try {
+        await client.query("ROLLBACK");
+      } catch {
+        // Rollback may fail if connection is in a bad state
+      }
+      return { valid: false, errors, operationsChecked: opsChecked };
+    }
+
+    return { valid: true, errors: [], operationsChecked: opsChecked };
   });
 }
 

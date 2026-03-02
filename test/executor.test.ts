@@ -17,7 +17,7 @@ import {
   useTestProject,
 } from "./helpers.js";
 import { resolveConfig } from "../src/core/config.js";
-import { runAll, runPre, runMigrate, runPost } from "../src/executor/index.js";
+import { runAll, runPre, runMigrate, runPost, runValidate } from "../src/executor/index.js";
 import { logger, LogLevel } from "../src/core/logger.js";
 import { closePool } from "../src/core/db.js";
 
@@ -725,5 +725,130 @@ triggers:
     const second = await runMigrate(config);
     expect(second.success).toBe(true);
     expect(second.operationsExecuted).toBe(0); // Nothing to do
+  });
+
+  it("validate returns valid for a correct schema", async () => {
+    writeSchema(
+      ctx.project.schemaDir,
+      "users.yaml",
+      `table: users
+columns:
+  - name: id
+    type: serial
+    primary_key: true
+  - name: email
+    type: varchar(255)
+    unique: true
+  - name: created_at
+    type: timestamptz
+    default: now()
+`,
+    );
+
+    const config = resolveConfig({
+      connectionString: ctx.connectionString,
+      baseDir: ctx.project.baseDir,
+      dryRun: false,
+    });
+
+    const result = await runValidate(config);
+    expect(result.valid).toBe(true);
+    expect(result.errors).toHaveLength(0);
+    expect(result.operationsChecked).toBeGreaterThan(0);
+  });
+
+  it("validate catches bad SQL in policy using expression", async () => {
+    writeSchema(
+      ctx.project.schemaDir,
+      "orders.yaml",
+      `table: orders
+rls: true
+columns:
+  - name: id
+    type: serial
+    primary_key: true
+  - name: user_id
+    type: integer
+policies:
+  - name: bad_policy
+    for: SELECT
+    using: "user_id = nonexistent_function()"
+`,
+    );
+
+    const config = resolveConfig({
+      connectionString: ctx.connectionString,
+      baseDir: ctx.project.baseDir,
+      dryRun: false,
+    });
+
+    const result = await runValidate(config);
+    expect(result.valid).toBe(false);
+    expect(result.errors.length).toBeGreaterThan(0);
+    expect(result.errors[0]).toMatch(/nonexistent_function/i);
+  });
+
+  it("validate catches bad SQL in function body", async () => {
+    // Use a SQL-language function — Postgres validates SQL bodies at creation time
+    // (unlike plpgsql which defers validation to first call)
+    writeSchema(
+      ctx.project.schemaDir,
+      "fn_broken.yaml",
+      `name: broken_function
+language: sql
+returns: integer
+body: SELECT id FROM nonexistent_table
+`,
+    );
+
+    writeSchema(
+      ctx.project.schemaDir,
+      "items.yaml",
+      `table: items
+columns:
+  - name: id
+    type: serial
+    primary_key: true
+`,
+    );
+
+    const config = resolveConfig({
+      connectionString: ctx.connectionString,
+      baseDir: ctx.project.baseDir,
+      dryRun: false,
+    });
+
+    const result = await runValidate(config);
+    expect(result.valid).toBe(false);
+    expect(result.errors.length).toBeGreaterThan(0);
+    expect(result.errors[0]).toMatch(/nonexistent_table/i);
+  });
+
+  it("validate does not modify the database", async () => {
+    writeSchema(
+      ctx.project.schemaDir,
+      "users.yaml",
+      `table: users
+columns:
+  - name: id
+    type: serial
+    primary_key: true
+  - name: email
+    type: varchar(255)
+`,
+    );
+
+    const config = resolveConfig({
+      connectionString: ctx.connectionString,
+      baseDir: ctx.project.baseDir,
+      dryRun: false,
+    });
+
+    const result = await runValidate(config);
+    expect(result.valid).toBe(true);
+    expect(result.operationsChecked).toBeGreaterThan(0);
+
+    // Table should NOT exist after validate (rolled back)
+    expect(await tableExists(ctx.connectionString, "users")).toBe(false);
   });
 });
