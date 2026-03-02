@@ -41,11 +41,11 @@ const DEFAULTS = {
 
 export function resolveConfig(overrides: Partial<SchemaFlowConfig> = {}): SchemaFlowConfig {
   const connectionString =
-    overrides.connectionString || process.env.DATABASE_URL || process.env.SCHEMA_FLOW_DATABASE_URL || "";
+    overrides.connectionString || process.env.SCHEMA_FLOW_DATABASE_URL || process.env.DATABASE_URL || "";
 
   if (!connectionString) {
     throw new Error(
-      "No database connection string provided. Set DATABASE_URL or SCHEMA_FLOW_DATABASE_URL, or pass --connection-string.",
+      "No database connection string provided. Set SCHEMA_FLOW_DATABASE_URL or DATABASE_URL, or pass --connection-string.",
     );
   }
 

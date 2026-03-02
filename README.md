@@ -147,6 +147,8 @@ npx @mabulu-inc/schema-flow <command> [options]
 | `--connection-string`, `--db` | PostgreSQL connection string |
 | `--dir` | Base directory (default: cwd) |
 | `--schema` | PostgreSQL schema (default: `public`) |
+| `-h`, `--help` | Show help |
+| `-V`, `--version` | Show version |
 
 ## Safe by Default
 
@@ -236,6 +238,31 @@ indexes:
 checks:
   - name: chk_positive_amount
     expression: "amount > 0"
+```
+
+### Function Schema
+
+Functions use separate files with the `fn_` prefix (e.g., `fn_update_timestamp.yaml`).
+
+| Property | Type | Default | Description |
+| --- | --- | --- | --- |
+| `name` | string | required | Function name |
+| `language` | string | `plpgsql` | SQL language (`plpgsql`, `sql`, etc.) |
+| `returns` | string | `void` | Return type |
+| `args` | string | — | Argument list (e.g., `p_id integer, p_name text`) |
+| `body` | string | required | Function body |
+| `replace` | boolean | `true` | Use `CREATE OR REPLACE` |
+
+```yaml
+# schema-flow/schema/fn_update_timestamp.yaml
+name: update_timestamp
+language: plpgsql
+returns: trigger
+body: |
+  BEGIN
+    NEW.updated_at = now();
+    RETURN NEW;
+  END;
 ```
 
 ## Pre/Post Migration Scripts
@@ -328,9 +355,10 @@ schema-flow looks for a `schema-flow/` directory in the current working director
 ```
 my-project/
   schema-flow/
-    schema/         ← One YAML file per table
+    schema/         ← One YAML file per table or function
       users.yaml
       posts.yaml
+      fn_update_timestamp.yaml
     pre/            ← Pre-migration SQL scripts
       20260228153000_rename_column.sql
     post/           ← Post-migration SQL scripts
@@ -353,7 +381,7 @@ Run all commands from your project root — schema-flow automatically finds the 
 ## Programmatic API
 
 ```typescript
-import { resolveConfig, runAll, buildPlan, closePool } from "@mabulu-inc/schema-flow";
+import { resolveConfig, runAll, closePool } from "@mabulu-inc/schema-flow";
 
 const config = resolveConfig({
   connectionString: process.env.DATABASE_URL,

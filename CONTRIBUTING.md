@@ -11,18 +11,27 @@ pnpm install
 pnpm run build
 ```
 
-You'll need a PostgreSQL instance for integration testing. The quickest way is the built-in script, which starts Postgres in-memory (data directory on tmpfs, durability disabled):
+You'll need a PostgreSQL instance for integration testing. The quickest way is the built-in script, which starts Postgres in-memory (data directory on tmpfs, durability disabled) on a dynamically assigned port:
 
 ```bash
 pnpm run test:db
-export TEST_DATABASE_URL="postgresql://postgres:postgres@localhost:5432/postgres"
 ```
 
-This runs Postgres with `--tmpfs /var/lib/postgresql/data` and `-c fsync=off -c full_page_writes=off -c synchronous_commit=off`, so all data lives in RAM and no disk I/O occurs. Tests run significantly faster this way.
+The script auto-detects Docker or Podman via the `CONTAINER_RUNTIME` env var (defaults to `podman` if available, otherwise `docker`). It picks a free port automatically and writes it to `.test-db-port` — the test helpers read this file to discover the connection URL, so no manual port management is needed.
 
-Or run the Docker command directly for more control:
+If you already have a Postgres instance running, skip the container entirely:
 
 ```bash
+export TEST_DATABASE_URL="postgresql://user:pass@localhost:5432/yourdb"
+```
+
+When `TEST_DATABASE_URL` is set, `pnpm run test:db` and related scripts exit immediately without starting a container.
+
+<details>
+<summary>Manual container start (if you need more control)</summary>
+
+```bash
+# Docker
 docker run -d \
   --name sf-postgres \
   --tmpfs /var/lib/postgresql/data \
@@ -31,16 +40,9 @@ docker run -d \
   -e POSTGRES_DB=postgres \
   -p 5432:5432 \
   postgres:latest \
-  -c fsync=off \
-  -c full_page_writes=off \
-  -c synchronous_commit=off
+  -c fsync=off -c full_page_writes=off -c synchronous_commit=off
 
-export TEST_DATABASE_URL="postgresql://postgres:postgres@localhost:5432/postgres"
-```
-
-Podman works the same way:
-
-```bash
+# Podman — same flags, just swap the command and use the full image path
 podman run -d \
   --name sf-postgres \
   --tmpfs /var/lib/postgresql/data \
@@ -49,18 +51,12 @@ podman run -d \
   -e POSTGRES_DB=postgres \
   -p 5432:5432 \
   docker.io/library/postgres:latest \
-  -c fsync=off \
-  -c full_page_writes=off \
-  -c synchronous_commit=off
+  -c fsync=off -c full_page_writes=off -c synchronous_commit=off
 
 export TEST_DATABASE_URL="postgresql://postgres:postgres@localhost:5432/postgres"
 ```
 
-Or point at any existing Postgres instance you have running:
-
-```bash
-export TEST_DATABASE_URL="postgresql://user:pass@localhost:5432/yourdb"
-```
+</details>
 
 ## Project Structure
 
@@ -92,31 +88,34 @@ pnpm test
 pnpm run test:watch
 ```
 
-Tests run sequentially to avoid database contention. The `pretest` script compiles TypeScript before running tests.
+Tests run sequentially to avoid database contention. The `pretest` script ensures the test database is running and compiles TypeScript before running tests. The `posttest` script automatically stops the container when tests finish, so it doesn't linger.
 
-When you're done, stop the container:
-
-```bash
-pnpm run test:db:stop
-```
+`pnpm test` runs with `--coverage` and enforces coverage thresholds (60% lines, 75% functions, 50% branches, 60% statements).
 
 ## Development Workflow
 
 1. Create a branch from `main`
 2. Make your changes
 3. Run `pnpm run build` — the project must compile cleanly with zero errors
-4. Run `pnpm test` — all tests must pass against a real Postgres instance
-5. Open a pull request
+4. Run `pnpm run lint` — code must pass ESLint checks
+5. Run `pnpm run format:check` — code must match Prettier formatting
+6. Run `pnpm test` — all tests must pass against a real Postgres instance
+7. Open a pull request
 
 ## CI Pipeline
 
-Every push and PR runs through GitHub Actions:
+CI is planned but not yet configured. The intended setup:
 
 - **Build** — TypeScript compilation on Node 22
 - **Typecheck** — `tsc --noEmit` for strict type safety
+- **Lint & format** — ESLint + Prettier checks
 - **Test matrix** — Integration tests across Node 20/22 × Postgres 15/16/17, plus a `postgres:latest` run
 
-CI starts each Postgres container in-memory mode (`--tmpfs`, `fsync=off`, `full_page_writes=off`, `synchronous_commit=off`) for fast, deterministic test runs. See `.github/workflows/ci.yml` for details.
+In the meantime, you can run the full CI-equivalent check locally:
+
+```bash
+pnpm run ci
+```
 
 ## Conventions
 

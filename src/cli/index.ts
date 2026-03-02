@@ -2,11 +2,15 @@
 // src/cli/index.ts
 // CLI entry point for schema-flow — declarative zero-downtime PostgreSQL migrations
 
+import { createRequire } from "node:module";
 import { resolveConfig, validateDirectories, type SchemaFlowConfig } from "../core/config.js";
 import { logger, LogLevel } from "../core/logger.js";
 import { testConnection, closePool } from "../core/db.js";
 import { runAll, runPre, runMigrate, runPost } from "../executor/index.js";
 import { scaffoldPre, scaffoldPost, generateFromDb, scaffoldInit } from "../scaffold/index.js";
+
+const require = createRequire(import.meta.url);
+const { version } = require("../../package.json") as { version: string };
 
 // ─── Argument Parsing ───────────────────────────────────────────────────────
 
@@ -23,6 +27,7 @@ interface CliArgs {
     baseDir?: string;
     schema?: string;
     help: boolean;
+    version: boolean;
   };
 }
 
@@ -41,6 +46,7 @@ function parseArgs(argv: string[]): CliArgs {
     baseDir: getFlag(args, "--dir"),
     schema: getFlag(args, "--schema"),
     help: args.includes("--help") || args.includes("-h"),
+    version: args.includes("--version") || args.includes("-V"),
   };
 
   return { command, subcommand, name, flags };
@@ -88,6 +94,7 @@ function printHelp(): void {
     --dir                      Base directory (default: current directory)
     --schema                   PostgreSQL schema (default: public)
     -h, --help                 Show help
+    -V, --version              Show version
 
   ${"\x1b[1m"}Safety:${"\x1b[0m"}
     By default, schema-flow only performs safe, additive operations:
@@ -105,8 +112,8 @@ function printHelp(): void {
         post/      Post-migration SQL scripts (run after schema changes)
 
   ${"\x1b[1m"}Environment:${"\x1b[0m"}
-    DATABASE_URL                       PostgreSQL connection string
-    SCHEMA_FLOW_DATABASE_URL           Alternative connection string variable
+    SCHEMA_FLOW_DATABASE_URL           PostgreSQL connection string (takes precedence)
+    DATABASE_URL                       Fallback connection string
     SCHEMA_FLOW_LOG_LEVEL              Log level: debug, info, warn, error, silent
     SCHEMA_FLOW_ALLOW_DESTRUCTIVE      Set to "true" to allow destructive operations
 `);
@@ -206,6 +213,12 @@ async function main(): Promise<void> {
     if (levelMap[envLevel] !== undefined) {
       logger.setLevel(levelMap[envLevel]);
     }
+  }
+
+  // Version
+  if (args.flags.version) {
+    console.log(version);
+    process.exit(0);
   }
 
   // Help

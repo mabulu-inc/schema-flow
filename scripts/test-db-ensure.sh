@@ -2,6 +2,11 @@
 set -euo pipefail
 source "$(dirname "$0")/test-db-env.sh"
 
+# If TEST_DATABASE_URL is set, the user has their own database — skip container management
+if [ -n "${TEST_DATABASE_URL:-}" ]; then
+  exit 0
+fi
+
 # If the container is already running and healthy, nothing to do
 if $CONTAINER_RUNTIME exec "$CONTAINER_NAME" pg_isready -U postgres >/dev/null 2>&1; then
   exit 0

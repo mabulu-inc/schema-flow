@@ -2,6 +2,12 @@
 set -euo pipefail
 source "$(dirname "$0")/test-db-env.sh"
 
+# If TEST_DATABASE_URL is set, the user has their own database — skip container start
+if [ -n "${TEST_DATABASE_URL:-}" ]; then
+  echo "TEST_DATABASE_URL is set — skipping container start"
+  exit 0
+fi
+
 # Pick a free port: try 5432 first, otherwise let the OS assign one
 pick_port() {
   if ! node -e "
