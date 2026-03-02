@@ -1,7 +1,10 @@
 # Schema for table: users
 # One file per table. Everything about this table lives here.
+# Timestamps (created_at, updated_at) come from the timestamps mixin.
 
 table: users
+
+use: [timestamps]
 
 columns:
   - name: id
@@ -22,14 +25,6 @@ columns:
   - name: is_active
     type: boolean
     default: "true"
-
-  - name: created_at
-    type: timestamptz
-    default: now()
-
-  - name: updated_at
-    type: timestamptz
-    default: now()
 
 indexes:
   - columns: [email]

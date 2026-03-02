@@ -7,7 +7,9 @@ import path from "node:path";
 import { glob } from "glob";
 import type { SchemaFlowConfig } from "../core/config.js";
 import { buildPlan } from "../planner/index.js";
-import { parseTableFile } from "../schema/parser.js";
+import { parseTableFile, parseFunctionFile } from "../schema/parser.js";
+import { loadMixins, expandMixins } from "../schema/mixins.js";
+import type { FunctionSchema } from "../schema/types.js";
 import { FileTracker } from "../core/tracker.js";
 import { withClient } from "../core/db.js";
 import { logger } from "../core/logger.js";
@@ -94,8 +96,61 @@ export async function runMigrate(config: SchemaFlowConfig): Promise<ExecutionRes
       };
     }
 
-    // Parse ALL schema files (not just changed ones) to build complete picture for FK resolution
-    const allSchemas = schemaFiles
+    // Separate function files from table files
+    const functionFiles = schemaFiles.filter((f) => {
+      const base = path.basename(f);
+      return base.startsWith("fn_");
+    });
+    const tableFiles = schemaFiles.filter((f) => {
+      const base = path.basename(f);
+      return !base.startsWith("fn_");
+    });
+
+    // Parse and apply function files first
+    const parsedFunctions: FunctionSchema[] = [];
+    for (const f of functionFiles) {
+      try {
+        parsedFunctions.push(parseFunctionFile(f));
+      } catch (err) {
+        const msg = `Failed to parse function ${f}: ${err instanceof Error ? err.message : String(err)}`;
+        errors.push(msg);
+        logger.error(msg);
+      }
+    }
+
+    if (errors.length > 0) {
+      return {
+        phase: "migrate",
+        success: false,
+        operationsExecuted: 0,
+        errors,
+        dryRun: config.dryRun,
+        blockedDestructive: 0,
+      };
+    }
+
+    // Apply functions before building plan
+    if (parsedFunctions.length > 0) {
+      if (config.dryRun) {
+        for (const fn of parsedFunctions) {
+          logger.info(`  [DRY RUN] Would create function: ${fn.name}`);
+        }
+      } else {
+        await client.query("BEGIN");
+        for (const fn of parsedFunctions) {
+          const replaceClause = fn.replace ? "OR REPLACE " : "";
+          const argsClause = fn.args ? `(${fn.args})` : "()";
+          const sql = `CREATE ${replaceClause}FUNCTION ${fn.name}${argsClause} RETURNS ${fn.returns} LANGUAGE ${fn.language} AS $fn_body$\n${fn.body}\n$fn_body$;`;
+          logger.debug(`Creating function: ${fn.name}`);
+          await client.query(sql);
+        }
+        await client.query("COMMIT");
+        logger.info(`Applied ${parsedFunctions.length} function(s)`);
+      }
+    }
+
+    // Parse ALL table schema files (not just changed ones) to build complete picture for FK resolution
+    const allSchemas = tableFiles
       .map((f) => {
         try {
           return parseTableFile(f);
@@ -119,8 +174,15 @@ export async function runMigrate(config: SchemaFlowConfig): Promise<ExecutionRes
       };
     }
 
+    // Expand mixins before building plan
+    const mixinMap = await loadMixins(config.mixinsDir);
+    if (mixinMap.size > 0) {
+      logger.info(`Loaded ${mixinMap.size} mixin(s)`);
+    }
+    const expandedSchemas = expandMixins(allSchemas, mixinMap);
+
     // Build migration plan — pass safety flag
-    const plan = await buildPlan(client, allSchemas, config.pgSchema, {
+    const plan = await buildPlan(client, expandedSchemas, config.pgSchema, {
       allowDestructive: config.allowDestructive,
     });
 

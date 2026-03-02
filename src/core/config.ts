@@ -15,6 +15,8 @@ export interface SchemaFlowConfig {
   preDir: string;
   /** Post-migration scripts directory */
   postDir: string;
+  /** Mixin definitions directory */
+  mixinsDir: string;
   /** PostgreSQL schema name (default: public) */
   pgSchema: string;
   /** Migration history table name */
@@ -55,6 +57,7 @@ export function resolveConfig(overrides: Partial<SchemaFlowConfig> = {}): Schema
   const schemaDir = path.resolve(baseDir, overrides.schemaDir || DEFAULTS.schemaDir);
   const preDir = path.resolve(baseDir, overrides.preDir || DEFAULTS.preDir);
   const postDir = path.resolve(baseDir, overrides.postDir || DEFAULTS.postDir);
+  const mixinsDir = path.resolve(baseDir, "mixins");
 
   const allowDestructive =
     overrides.allowDestructive ?? (process.env.SCHEMA_FLOW_ALLOW_DESTRUCTIVE === "true" || false);
@@ -65,6 +68,7 @@ export function resolveConfig(overrides: Partial<SchemaFlowConfig> = {}): Schema
     schemaDir,
     preDir,
     postDir,
+    mixinsDir,
     pgSchema: overrides.pgSchema || DEFAULTS.pgSchema,
     historyTable: overrides.historyTable || DEFAULTS.historyTable,
     dryRun: overrides.dryRun ?? false,

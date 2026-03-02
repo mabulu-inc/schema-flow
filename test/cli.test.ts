@@ -49,10 +49,15 @@ describe("CLI", () => {
       expect(output).toContain("--allow-destructive");
       expect(output).toContain("Safety:");
     });
+
+    it("mentions mixins in help", () => {
+      const output = run("--help");
+      expect(output).toContain("mixins");
+    });
   });
 
   describe("init", () => {
-    it("creates the directory structure", () => {
+    it("creates the directory structure including mixins", () => {
       const baseDir = path.join("/tmp", `sf_cli_init_${Date.now()}`);
       try {
         const output = run(`init --dir ${baseDir}`);
@@ -60,6 +65,7 @@ describe("CLI", () => {
         expect(existsSync(path.join(baseDir, "schema-flow", "schema"))).toBe(true);
         expect(existsSync(path.join(baseDir, "schema-flow", "pre"))).toBe(true);
         expect(existsSync(path.join(baseDir, "schema-flow", "post"))).toBe(true);
+        expect(existsSync(path.join(baseDir, "schema-flow", "mixins"))).toBe(true);
       } finally {
         rmSync(baseDir, { recursive: true, force: true });
       }

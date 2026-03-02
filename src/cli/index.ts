@@ -107,9 +107,10 @@ function printHelp(): void {
   ${"\x1b[1m"}Convention:${"\x1b[0m"}
     schema-flow expects the following directory structure:
       schema-flow/
-        schema/    Declarative table YAML files (one per table)
+        schema/    Declarative table YAML files (one per table) and function files (fn_*.yaml)
         pre/       Pre-migration SQL scripts (run before schema changes)
         post/      Post-migration SQL scripts (run after schema changes)
+        mixins/    Reusable schema mixins (e.g., timestamps, soft_delete)
 
   ${"\x1b[1m"}Environment:${"\x1b[0m"}
     SCHEMA_FLOW_DATABASE_URL           PostgreSQL connection string (takes precedence)
@@ -159,11 +160,22 @@ async function showStatus(config: SchemaFlowConfig): Promise<void> {
     console.log(`    Changed:   ${preStatus.changedFiles.length}`);
     console.log(`    Unchanged: ${preStatus.unchangedFiles.length}`);
 
+    // Mixin files
+    const mixinFiles = await glob([
+      path.join(config.mixinsDir, "*.yaml"),
+      path.join(config.mixinsDir, "*.yml"),
+    ]);
+
     console.log("");
     console.log("  Post-migration scripts:");
     console.log(`    New:       ${postStatus.newFiles.length}`);
     console.log(`    Changed:   ${postStatus.changedFiles.length}`);
     console.log(`    Unchanged: ${postStatus.unchangedFiles.length}`);
+
+    if (mixinFiles.length > 0) {
+      console.log("");
+      console.log(`  Mixins: ${mixinFiles.length} file(s)`);
+    }
 
     const totalPending =
       schemaStatus.newFiles.length +

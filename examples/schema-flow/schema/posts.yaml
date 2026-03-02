@@ -1,7 +1,10 @@
 # Schema for table: posts
 # Foreign keys reference other tables — schema-flow handles the ordering.
+# Timestamps (created_at, updated_at) come from the timestamps mixin.
 
 table: posts
+
+use: [timestamps]
 
 columns:
   - name: id
@@ -33,14 +36,6 @@ columns:
   - name: published_at
     type: timestamptz
     nullable: true
-
-  - name: created_at
-    type: timestamptz
-    default: now()
-
-  - name: updated_at
-    type: timestamptz
-    default: now()
 
 indexes:
   - columns: [author_id]

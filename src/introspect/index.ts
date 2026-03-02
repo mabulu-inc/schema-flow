@@ -2,7 +2,7 @@
 // Introspect the current PostgreSQL database state
 
 import pg from "pg";
-import type { TableSchema, ColumnDef } from "../schema/types.js";
+import type { TableSchema, ColumnDef, TriggerDef } from "../schema/types.js";
 
 export interface DbColumn {
   column_name: string;
@@ -37,6 +37,70 @@ export interface DbFunction {
   external_language: string;
   routine_definition: string;
   parameter_list: string;
+}
+
+export interface DbTrigger {
+  trigger_name: string;
+  event_manipulation: string;
+  action_timing: string;
+  action_orientation: string;
+  action_condition: string | null;
+  function_name: string;
+}
+
+/** Get triggers for a table */
+export async function getTableTriggers(
+  client: pg.PoolClient,
+  tableName: string,
+  pgSchema: string,
+): Promise<TriggerDef[]> {
+  const res = await client.query<DbTrigger>(
+    `SELECT
+       t.trigger_name,
+       t.event_manipulation,
+       t.action_timing,
+       t.action_orientation,
+       t.action_condition,
+       p.proname AS function_name
+     FROM information_schema.triggers t
+     JOIN pg_trigger pg_t ON pg_t.tgname = t.trigger_name
+     JOIN pg_proc p ON pg_t.tgfoid = p.oid
+     JOIN pg_class c ON pg_t.tgrelid = c.oid
+     JOIN pg_namespace n ON c.relnamespace = n.oid
+     WHERE t.trigger_schema = $1
+       AND t.event_object_table = $2
+       AND NOT pg_t.tgisinternal
+     ORDER BY t.trigger_name, t.event_manipulation`,
+    [pgSchema, tableName],
+  );
+
+  return dbTriggersToTriggerDefs(res.rows);
+}
+
+/** Group raw trigger rows (one per event) into TriggerDef objects */
+export function dbTriggersToTriggerDefs(rows: DbTrigger[]): TriggerDef[] {
+  const grouped = new Map<string, DbTrigger[]>();
+  for (const row of rows) {
+    if (!grouped.has(row.trigger_name)) {
+      grouped.set(row.trigger_name, []);
+    }
+    grouped.get(row.trigger_name)!.push(row);
+  }
+
+  const triggers: TriggerDef[] = [];
+  for (const [name, triggerRows] of grouped) {
+    const first = triggerRows[0];
+    triggers.push({
+      name,
+      timing: first.action_timing as TriggerDef["timing"],
+      events: triggerRows.map((r) => r.event_manipulation as TriggerDef["events"][number]),
+      function: first.function_name,
+      for_each: first.action_orientation === "ROW" ? "ROW" : "STATEMENT",
+      when: first.action_condition || undefined,
+    });
+  }
+
+  return triggers;
 }
 
 /** Get all user tables in the schema */
@@ -204,6 +268,12 @@ export async function introspectTable(
 
   if (!isSinglePk && pkColumns.length > 1) {
     schema.primary_key = pkColumns;
+  }
+
+  // Introspect triggers
+  const triggers = await getTableTriggers(client, tableName, pgSchema);
+  if (triggers.length > 0) {
+    schema.triggers = triggers;
   }
 
   return schema;

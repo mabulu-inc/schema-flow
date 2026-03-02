@@ -3,7 +3,13 @@
 
 import { describe, it, expect } from "vitest";
 import { useTestClient } from "./helpers.js";
-import { getExistingTables, getTableColumns, getTableConstraints, introspectTable } from "../src/introspect/index.js";
+import {
+  getExistingTables,
+  getTableColumns,
+  getTableConstraints,
+  getTableTriggers,
+  introspectTable,
+} from "../src/introspect/index.js";
 
 describe("introspect", () => {
   const ctx = useTestClient();
@@ -107,5 +113,76 @@ describe("introspect", () => {
 
     const schema = await introspectTable(ctx.client, "tag_map", "public");
     expect(schema.primary_key).toEqual(["item_id", "tag_id"]);
+  });
+
+  it("gets table triggers", async () => {
+    await ctx.client.query(`
+      CREATE TABLE audit_test (
+        id serial PRIMARY KEY,
+        updated_at timestamptz NOT NULL DEFAULT now()
+      )
+    `);
+    await ctx.client.query(`
+      CREATE OR REPLACE FUNCTION update_timestamp() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN NEW.updated_at = now(); RETURN NEW; END; $$
+    `);
+    await ctx.client.query(`
+      CREATE TRIGGER set_updated_at BEFORE UPDATE ON audit_test
+      FOR EACH ROW EXECUTE FUNCTION update_timestamp()
+    `);
+
+    const triggers = await getTableTriggers(ctx.client, "audit_test", "public");
+    expect(triggers).toHaveLength(1);
+    expect(triggers[0].name).toBe("set_updated_at");
+    expect(triggers[0].timing).toBe("BEFORE");
+    expect(triggers[0].events).toContain("UPDATE");
+    expect(triggers[0].function).toBe("update_timestamp");
+    expect(triggers[0].for_each).toBe("ROW");
+  });
+
+  it("introspectTable includes triggers", async () => {
+    await ctx.client.query(`
+      CREATE TABLE triggered_table (
+        id serial PRIMARY KEY,
+        updated_at timestamptz NOT NULL DEFAULT now()
+      )
+    `);
+    await ctx.client.query(`
+      CREATE OR REPLACE FUNCTION update_timestamp() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN NEW.updated_at = now(); RETURN NEW; END; $$
+    `);
+    await ctx.client.query(`
+      CREATE TRIGGER set_triggered_table_updated BEFORE UPDATE ON triggered_table
+      FOR EACH ROW EXECUTE FUNCTION update_timestamp()
+    `);
+
+    const schema = await introspectTable(ctx.client, "triggered_table", "public");
+    expect(schema.triggers).toBeDefined();
+    expect(schema.triggers).toHaveLength(1);
+    expect(schema.triggers![0].name).toBe("set_triggered_table_updated");
+  });
+
+  it("returns empty triggers for table without triggers", async () => {
+    await ctx.client.query(`CREATE TABLE no_triggers (id serial PRIMARY KEY)`);
+    const triggers = await getTableTriggers(ctx.client, "no_triggers", "public");
+    expect(triggers).toHaveLength(0);
+  });
+
+  it("groups multiple events for same trigger", async () => {
+    await ctx.client.query(`CREATE TABLE multi_event (id serial PRIMARY KEY, val text)`);
+    await ctx.client.query(`
+      CREATE OR REPLACE FUNCTION noop_trigger() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN RETURN NEW; END; $$
+    `);
+    await ctx.client.query(`
+      CREATE TRIGGER multi_trigger BEFORE INSERT OR UPDATE ON multi_event
+      FOR EACH ROW EXECUTE FUNCTION noop_trigger()
+    `);
+
+    const triggers = await getTableTriggers(ctx.client, "multi_event", "public");
+    expect(triggers).toHaveLength(1);
+    expect(triggers[0].events).toContain("INSERT");
+    expect(triggers[0].events).toContain("UPDATE");
+    expect(triggers[0].events).toHaveLength(2);
   });
 });

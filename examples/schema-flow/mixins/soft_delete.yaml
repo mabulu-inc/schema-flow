@@ -1,0 +1,15 @@
+# Mixin: soft_delete
+# Adds a deleted_at column and a partial index for active records.
+# Usage: add `use: [soft_delete]` to any table.
+
+mixin: soft_delete
+
+columns:
+  - name: deleted_at
+    type: timestamptz
+    nullable: true
+
+indexes:
+  - name: idx_{table}_active
+    columns: [deleted_at]
+    where: "deleted_at IS NULL"

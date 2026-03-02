@@ -2,7 +2,18 @@
 // Integration tests for the full migration lifecycle
 
 import { describe, it, expect } from "vitest";
-import { writeSchema, writeScript, tableExists, getColumns, fkExists, execSql, useTestProject } from "./helpers.js";
+import {
+  writeSchema,
+  writeScript,
+  writeMixin,
+  tableExists,
+  getColumns,
+  fkExists,
+  triggerExists,
+  functionExists,
+  execSql,
+  useTestProject,
+} from "./helpers.js";
 import { resolveConfig } from "../src/core/config.js";
 import { runAll, runPre, runMigrate, runPost } from "../src/executor/index.js";
 import { logger, LogLevel } from "../src/core/logger.js";
@@ -346,5 +357,223 @@ columns:
     const cols = await getColumns(ctx.connectionString, "items");
     expect(cols).not.toContain("obsolete");
     expect(cols).toContain("name");
+  });
+
+  it("creates functions from fn_ files and triggers from YAML", async () => {
+    writeSchema(
+      ctx.project.schemaDir,
+      "fn_update_timestamp.yaml",
+      `name: update_timestamp
+language: plpgsql
+returns: trigger
+body: |
+  BEGIN
+    NEW.updated_at = now();
+    RETURN NEW;
+  END;
+`,
+    );
+
+    writeSchema(
+      ctx.project.schemaDir,
+      "events.yaml",
+      `table: events
+columns:
+  - name: id
+    type: serial
+    primary_key: true
+  - name: updated_at
+    type: timestamptz
+    default: now()
+triggers:
+  - name: set_events_updated_at
+    timing: BEFORE
+    events: [UPDATE]
+    function: update_timestamp
+    for_each: ROW
+`,
+    );
+
+    const config = resolveConfig({
+      connectionString: ctx.connectionString,
+      baseDir: ctx.project.baseDir,
+      dryRun: false,
+    });
+
+    const result = await runMigrate(config);
+    expect(result.success).toBe(true);
+
+    expect(await functionExists(ctx.connectionString, "update_timestamp")).toBe(true);
+    expect(await tableExists(ctx.connectionString, "events")).toBe(true);
+    expect(await triggerExists(ctx.connectionString, "set_events_updated_at", "events")).toBe(true);
+  });
+
+  it("expands mixins and creates tables with mixin columns and triggers", async () => {
+    writeSchema(
+      ctx.project.schemaDir,
+      "fn_update_timestamp.yaml",
+      `name: update_timestamp
+language: plpgsql
+returns: trigger
+body: |
+  BEGIN
+    NEW.updated_at = now();
+    RETURN NEW;
+  END;
+`,
+    );
+
+    writeMixin(
+      ctx.project.mixinsDir,
+      "timestamps.yaml",
+      `mixin: timestamps
+columns:
+  - name: created_at
+    type: timestamptz
+    default: now()
+  - name: updated_at
+    type: timestamptz
+    default: now()
+triggers:
+  - name: set_{table}_updated_at
+    timing: BEFORE
+    events: [UPDATE]
+    function: update_timestamp
+    for_each: ROW
+`,
+    );
+
+    writeSchema(
+      ctx.project.schemaDir,
+      "products.yaml",
+      `table: products
+use: [timestamps]
+columns:
+  - name: id
+    type: serial
+    primary_key: true
+  - name: name
+    type: varchar(100)
+`,
+    );
+
+    const config = resolveConfig({
+      connectionString: ctx.connectionString,
+      baseDir: ctx.project.baseDir,
+      dryRun: false,
+    });
+
+    const result = await runMigrate(config);
+    expect(result.success).toBe(true);
+
+    expect(await tableExists(ctx.connectionString, "products")).toBe(true);
+    const cols = await getColumns(ctx.connectionString, "products");
+    expect(cols).toContain("created_at");
+    expect(cols).toContain("updated_at");
+    expect(cols).toContain("name");
+    expect(await triggerExists(ctx.connectionString, "set_products_updated_at", "products")).toBe(true);
+  });
+
+  it("dry-run shows trigger operations", async () => {
+    writeSchema(
+      ctx.project.schemaDir,
+      "fn_update_timestamp.yaml",
+      `name: update_timestamp
+language: plpgsql
+returns: trigger
+body: |
+  BEGIN
+    NEW.updated_at = now();
+    RETURN NEW;
+  END;
+`,
+    );
+
+    writeSchema(
+      ctx.project.schemaDir,
+      "items.yaml",
+      `table: items
+columns:
+  - name: id
+    type: serial
+    primary_key: true
+  - name: updated_at
+    type: timestamptz
+    default: now()
+triggers:
+  - name: set_items_updated
+    timing: BEFORE
+    events: [UPDATE]
+    function: update_timestamp
+    for_each: ROW
+`,
+    );
+
+    const config = resolveConfig({
+      connectionString: ctx.connectionString,
+      baseDir: ctx.project.baseDir,
+      dryRun: true,
+    });
+
+    const result = await runMigrate(config);
+    expect(result.success).toBe(true);
+    expect(result.dryRun).toBe(true);
+    // Should include the trigger creation op in the count
+    expect(result.operationsExecuted).toBeGreaterThanOrEqual(2); // create table + create trigger
+
+    // Table should NOT exist (dry run)
+    expect(await tableExists(ctx.connectionString, "items")).toBe(false);
+  });
+
+  it("idempotent second run with triggers", async () => {
+    writeSchema(
+      ctx.project.schemaDir,
+      "fn_update_timestamp.yaml",
+      `name: update_timestamp
+language: plpgsql
+returns: trigger
+body: |
+  BEGIN
+    NEW.updated_at = now();
+    RETURN NEW;
+  END;
+`,
+    );
+
+    writeSchema(
+      ctx.project.schemaDir,
+      "things.yaml",
+      `table: things
+columns:
+  - name: id
+    type: serial
+    primary_key: true
+  - name: updated_at
+    type: timestamptz
+    default: now()
+triggers:
+  - name: set_things_updated
+    timing: BEFORE
+    events: [UPDATE]
+    function: update_timestamp
+    for_each: ROW
+`,
+    );
+
+    const config = resolveConfig({
+      connectionString: ctx.connectionString,
+      baseDir: ctx.project.baseDir,
+      dryRun: false,
+    });
+
+    const first = await runMigrate(config);
+    expect(first.success).toBe(true);
+    expect(first.operationsExecuted).toBeGreaterThan(0);
+
+    await closePool();
+
+    const second = await runMigrate(config);
+    expect(second.success).toBe(true);
+    expect(second.operationsExecuted).toBe(0); // Nothing to do
   });
 });

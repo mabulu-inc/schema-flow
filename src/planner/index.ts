@@ -3,7 +3,7 @@
 // Key design: CREATE TABLEs first (without FKs), then ALTER TABLEs for FKs last
 // Safety: destructive operations (drops, narrowing changes) are blocked by default
 
-import type { TableSchema, ColumnDef, IndexDef } from "../schema/types.js";
+import type { TableSchema, ColumnDef, IndexDef, TriggerDef } from "../schema/types.js";
 import { introspectTable, getExistingTables } from "../introspect/index.js";
 import { logger } from "../core/logger.js";
 import pg from "pg";
@@ -19,7 +19,9 @@ export type OperationType =
   | "add_foreign_key"
   | "drop_foreign_key"
   | "drop_table"
-  | "create_function";
+  | "create_function"
+  | "create_trigger"
+  | "drop_trigger";
 
 export interface Operation {
   type: OperationType;
@@ -224,6 +226,13 @@ function planCreateTable(schema: TableSchema, pgSchema: string): Operation[] {
     }
   }
 
+  // Triggers
+  if (schema.triggers) {
+    for (const trigger of schema.triggers) {
+      ops.push(planCreateTrigger(schema.table, trigger, pgSchema));
+    }
+  }
+
   // FK ops come last
   ops.push(...fkOps);
 
@@ -287,6 +296,10 @@ async function planAlterTable(client: pg.PoolClient, desired: TableSchema, pgSch
       });
     }
   }
+
+  // Trigger diff
+  const triggerOps = planTriggerDiff(desired.table, desired.triggers || [], current.triggers || [], pgSchema);
+  ops.push(...triggerOps);
 
   return ops;
 }
@@ -379,6 +392,76 @@ function planCreateIndex(tableName: string, idx: IndexDef, pgSchema: string): Op
     phase: "structure",
     destructive: false,
   };
+}
+
+function planCreateTrigger(tableName: string, trigger: TriggerDef, pgSchema: string): Operation {
+  const events = trigger.events.join(" OR ");
+  const when = trigger.when ? ` WHEN (${trigger.when})` : "";
+  const sql = `CREATE TRIGGER "${trigger.name}" ${trigger.timing} ${events} ON "${pgSchema}"."${tableName}" FOR EACH ${trigger.for_each}${when} EXECUTE FUNCTION ${trigger.function}();`;
+
+  return {
+    type: "create_trigger",
+    table: tableName,
+    sql,
+    description: `Create trigger ${trigger.name} on ${tableName}`,
+    phase: "structure",
+    destructive: false,
+  };
+}
+
+function planDropTrigger(tableName: string, triggerName: string, pgSchema: string, destructive: boolean): Operation {
+  return {
+    type: "drop_trigger",
+    table: tableName,
+    sql: `DROP TRIGGER IF EXISTS "${triggerName}" ON "${pgSchema}"."${tableName}";`,
+    description: `Drop trigger ${triggerName} on ${tableName}`,
+    phase: "structure",
+    destructive,
+  };
+}
+
+function planTriggerDiff(
+  tableName: string,
+  desired: TriggerDef[],
+  current: TriggerDef[],
+  pgSchema: string,
+): Operation[] {
+  const ops: Operation[] = [];
+  const currentMap = new Map(current.map((t) => [t.name, t]));
+  const desiredMap = new Map(desired.map((t) => [t.name, t]));
+
+  // New or changed triggers
+  for (const d of desired) {
+    const c = currentMap.get(d.name);
+    if (!c) {
+      // New trigger
+      ops.push(planCreateTrigger(tableName, d, pgSchema));
+    } else {
+      // Check if changed
+      const changed =
+        c.timing !== d.timing ||
+        c.function !== d.function ||
+        c.for_each !== d.for_each ||
+        c.when !== d.when ||
+        c.events.length !== d.events.length ||
+        !c.events.every((e) => d.events.includes(e));
+
+      if (changed) {
+        // Drop and recreate — both non-destructive (safe replacement)
+        ops.push(planDropTrigger(tableName, d.name, pgSchema, false));
+        ops.push(planCreateTrigger(tableName, d, pgSchema));
+      }
+    }
+  }
+
+  // Removed triggers (in DB but not in YAML) → destructive
+  for (const c of current) {
+    if (!desiredMap.has(c.name)) {
+      ops.push(planDropTrigger(tableName, c.name, pgSchema, true));
+    }
+  }
+
+  return ops;
 }
 
 function buildAddColumnSql(tableName: string, col: ColumnDef, pgSchema: string): string {

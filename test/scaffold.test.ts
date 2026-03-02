@@ -25,14 +25,16 @@ describe("scaffold", () => {
   });
 
   describe("scaffoldInit", () => {
-    it("creates schema, pre, and post directories", async () => {
+    it("creates schema, pre, post, and mixins directories", async () => {
       const baseDir = path.join("/tmp", `sf_init_test_${Date.now()}`);
       try {
         scaffoldInit(baseDir);
         expect(existsSync(path.join(baseDir, "schema-flow", "schema"))).toBe(true);
         expect(existsSync(path.join(baseDir, "schema-flow", "pre"))).toBe(true);
         expect(existsSync(path.join(baseDir, "schema-flow", "post"))).toBe(true);
+        expect(existsSync(path.join(baseDir, "schema-flow", "mixins"))).toBe(true);
         expect(existsSync(path.join(baseDir, "schema-flow", "schema", ".gitkeep"))).toBe(true);
+        expect(existsSync(path.join(baseDir, "schema-flow", "mixins", ".gitkeep"))).toBe(true);
       } finally {
         rmSync(baseDir, { recursive: true, force: true });
       }
@@ -125,6 +127,40 @@ describe("generateFromDb", () => {
     expect(postsContent).toContain("table: posts");
     expect(postsContent).toContain("references");
     expect(postsContent).toContain("users");
+  });
+
+  it("generates YAML files with triggers", async () => {
+    await execSql(
+      ctx.connectionString,
+      `CREATE TABLE triggered (
+        id serial PRIMARY KEY,
+        updated_at timestamptz NOT NULL DEFAULT now()
+      )`,
+    );
+    await execSql(
+      ctx.connectionString,
+      `CREATE OR REPLACE FUNCTION update_timestamp() RETURNS trigger LANGUAGE plpgsql AS $$
+       BEGIN NEW.updated_at = now(); RETURN NEW; END; $$`,
+    );
+    await execSql(
+      ctx.connectionString,
+      `CREATE TRIGGER set_triggered_updated BEFORE UPDATE ON triggered
+       FOR EACH ROW EXECUTE FUNCTION update_timestamp()`,
+    );
+
+    const config = resolveConfig({
+      connectionString: ctx.connectionString,
+      baseDir: ctx.project.baseDir,
+    });
+
+    const files = await generateFromDb(config);
+    const triggeredFile = path.join(ctx.project.schemaDir, "triggered.yaml");
+    expect(existsSync(triggeredFile)).toBe(true);
+
+    const content = readFileSync(triggeredFile, "utf-8");
+    expect(content).toContain("triggers");
+    expect(content).toContain("set_triggered_updated");
+    expect(content).toContain("update_timestamp");
   });
 
   it("excludes the schema-flow history table", async () => {

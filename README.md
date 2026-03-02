@@ -34,9 +34,10 @@ This creates:
 
 ```
 schema-flow/
-  schema/     ← Declarative YAML table definitions (one file per table)
+  schema/     ← Declarative YAML table definitions (one file per table) and function files (fn_*.yaml)
   pre/        ← Pre-migration SQL scripts (run before schema changes)
   post/       ← Post-migration SQL scripts (run after schema changes)
+  mixins/     ← Reusable schema mixins (timestamps, soft_delete, etc.)
 ```
 
 ### 2. Define your tables
@@ -164,6 +165,9 @@ Schema-flow is designed for zero-downtime deployments. By default, it only perfo
 | Widen type (int → bigint) | ✓ | |
 | Make column nullable | ✓ | |
 | Set / change default | ✓ | |
+| Create trigger | ✓ | |
+| Replace trigger (changed definition) | ✓ | |
+| Drop trigger (removed from YAML) | | ✓ |
 | Drop column | | ✓ |
 | Narrow type (bigint → int) | | ✓ |
 | Make column NOT NULL | | ✓ |
@@ -240,6 +244,76 @@ checks:
     expression: "amount > 0"
 ```
 
+### Triggers
+
+Declare triggers directly on tables. The referenced function must exist (define it in a `fn_*.yaml` file).
+
+```yaml
+triggers:
+  - name: set_orders_updated_at
+    timing: BEFORE           # BEFORE | AFTER | INSTEAD OF
+    events: [UPDATE]         # INSERT, UPDATE, DELETE, TRUNCATE
+    function: update_timestamp
+    for_each: ROW            # ROW | STATEMENT (default: ROW)
+    when: "OLD.* IS DISTINCT FROM NEW.*"  # optional WHEN clause
+```
+
+| Property | Type | Default | Description |
+| --- | --- | --- | --- |
+| `name` | string | required | Trigger name |
+| `timing` | string | required | `BEFORE`, `AFTER`, or `INSTEAD OF` |
+| `events` | string[] | required | Array of `INSERT`, `UPDATE`, `DELETE`, `TRUNCATE` |
+| `function` | string | required | Name of the trigger function to execute |
+| `for_each` | string | `ROW` | `ROW` or `STATEMENT` |
+| `when` | string | — | Optional SQL condition |
+
+### Mixins
+
+Mixins let you DRY up repeated schema patterns (timestamps, soft delete, tenant scoping, etc.). Define a mixin once in `schema-flow/mixins/`, then apply it to any table with `use:`.
+
+**schema-flow/mixins/timestamps.yaml**
+
+```yaml
+mixin: timestamps
+
+columns:
+  - name: created_at
+    type: timestamptz
+    default: now()
+  - name: updated_at
+    type: timestamptz
+    default: now()
+
+triggers:
+  - name: set_{table}_updated_at
+    timing: BEFORE
+    events: [UPDATE]
+    function: update_timestamp
+    for_each: ROW
+```
+
+**Using a mixin in a table:**
+
+```yaml
+table: users
+use: [timestamps]
+
+columns:
+  - name: id
+    type: serial
+    primary_key: true
+  - name: email
+    type: varchar(255)
+```
+
+The `{table}` placeholder in trigger, index, and check `name` fields is replaced with the table name during expansion. In the example above, the trigger becomes `set_users_updated_at`.
+
+**Merge rules:**
+
+- **Columns**: mixin columns are prepended (in `use` order), then table columns follow. If a table defines a column with the same name as a mixin column, the table's definition wins.
+- **Indexes, checks, triggers**: mixin entries are added before table entries.
+- The `use` property is stripped before planning — it's purely a composition mechanism.
+
 ### Function Schema
 
 Functions use separate files with the `fn_` prefix (e.g., `fn_update_timestamp.yaml`).
@@ -264,6 +338,8 @@ body: |
     RETURN NEW;
   END;
 ```
+
+Function files (prefixed with `fn_`) are automatically detected and applied with `CREATE OR REPLACE FUNCTION` before schema migration runs. This ensures trigger functions exist before any triggers reference them.
 
 ## Pre/Post Migration Scripts
 
@@ -359,6 +435,9 @@ my-project/
       users.yaml
       posts.yaml
       fn_update_timestamp.yaml
+    mixins/         ← Reusable schema mixins
+      timestamps.yaml
+      soft_delete.yaml
     pre/            ← Pre-migration SQL scripts
       20260228153000_rename_column.sql
     post/           ← Post-migration SQL scripts

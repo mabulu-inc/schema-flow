@@ -28,6 +28,34 @@ export interface CheckDef {
   expression: string;
 }
 
+export interface TriggerDef {
+  /** Trigger name */
+  name: string;
+  /** When the trigger fires */
+  timing: "BEFORE" | "AFTER" | "INSTEAD OF";
+  /** Events that fire the trigger */
+  events: ("INSERT" | "UPDATE" | "DELETE" | "TRUNCATE")[];
+  /** Function to execute */
+  function: string;
+  /** Trigger granularity */
+  for_each: "ROW" | "STATEMENT";
+  /** Optional WHEN condition */
+  when?: string;
+}
+
+export interface MixinSchema {
+  /** Mixin name (derived from filename if not specified) */
+  mixin: string;
+  /** Columns to add */
+  columns?: ColumnDef[];
+  /** Indexes to add */
+  indexes?: IndexDef[];
+  /** Check constraints to add */
+  checks?: CheckDef[];
+  /** Triggers to add */
+  triggers?: TriggerDef[];
+}
+
 export interface TableSchema {
   /** Table name (derived from filename if not specified) */
   table: string;
@@ -39,6 +67,10 @@ export interface TableSchema {
   indexes?: IndexDef[];
   /** Check constraints */
   checks?: CheckDef[];
+  /** Triggers */
+  triggers?: TriggerDef[];
+  /** Mixin names to apply */
+  use?: string[];
 }
 
 export interface ForeignKeyAction {

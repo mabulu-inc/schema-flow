@@ -80,6 +80,7 @@ export function createTempProject(): {
   schemaDir: string;
   preDir: string;
   postDir: string;
+  mixinsDir: string;
   cleanup: () => void;
 } {
   const suffix = randomBytes(4).toString("hex");
@@ -88,10 +89,12 @@ export function createTempProject(): {
   const schemaDir = path.join(sfDir, "schema");
   const preDir = path.join(sfDir, "pre");
   const postDir = path.join(sfDir, "post");
+  const mixinsDir = path.join(sfDir, "mixins");
 
   mkdirSync(schemaDir, { recursive: true });
   mkdirSync(preDir, { recursive: true });
   mkdirSync(postDir, { recursive: true });
+  mkdirSync(mixinsDir, { recursive: true });
 
   const cleanup = () => {
     if (existsSync(baseDir)) {
@@ -99,7 +102,7 @@ export function createTempProject(): {
     }
   };
 
-  return { baseDir, schemaDir, preDir, postDir, cleanup };
+  return { baseDir, schemaDir, preDir, postDir, mixinsDir, cleanup };
 }
 
 /**
@@ -203,6 +206,45 @@ export function useTestClient(): {
   });
 
   return ctx;
+}
+
+/**
+ * Check if a trigger exists on a table.
+ */
+export async function triggerExists(
+  connectionString: string,
+  triggerName: string,
+  tableName: string,
+): Promise<boolean> {
+  const res = await execSql(
+    connectionString,
+    `SELECT 1 FROM information_schema.triggers
+     WHERE trigger_schema = 'public' AND trigger_name = $1 AND event_object_table = $2`,
+    [triggerName, tableName],
+  );
+  return res.rowCount !== null && res.rowCount > 0;
+}
+
+/**
+ * Check if a function exists in the public schema.
+ */
+export async function functionExists(connectionString: string, functionName: string): Promise<boolean> {
+  const res = await execSql(
+    connectionString,
+    `SELECT 1 FROM information_schema.routines
+     WHERE routine_schema = 'public' AND routine_name = $1`,
+    [functionName],
+  );
+  return res.rowCount !== null && res.rowCount > 0;
+}
+
+/**
+ * Write a YAML mixin file into the mixins directory.
+ */
+export function writeMixin(mixinsDir: string, filename: string, content: string): string {
+  const filePath = path.join(mixinsDir, filename);
+  writeFileSync(filePath, content, "utf-8");
+  return filePath;
 }
 
 /**

@@ -243,6 +243,148 @@ describe("planner", () => {
     expect(plan.blocked).toHaveLength(0);
   });
 
+  it("plans create_trigger for new table with triggers", async () => {
+    const desired: TableSchema[] = [
+      {
+        table: "items",
+        columns: [
+          { name: "id", type: "serial", primary_key: true },
+          { name: "updated_at", type: "timestamptz" },
+        ],
+        triggers: [
+          {
+            name: "set_items_updated",
+            timing: "BEFORE",
+            events: ["UPDATE"],
+            function: "update_timestamp",
+            for_each: "ROW",
+          },
+        ],
+      },
+    ];
+
+    // Create the function first
+    await ctx.client.query(`
+      CREATE OR REPLACE FUNCTION update_timestamp() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN NEW.updated_at = now(); RETURN NEW; END; $$
+    `);
+
+    const plan = await buildPlan(ctx.client, desired, "public");
+    const triggerOp = plan.structureOps.find((o) => o.type === "create_trigger");
+    expect(triggerOp).toBeDefined();
+    expect(triggerOp!.sql).toContain("CREATE TRIGGER");
+    expect(triggerOp!.sql).toContain("set_items_updated");
+    expect(triggerOp!.destructive).toBe(false);
+  });
+
+  it("plans drop_trigger for removed trigger (destructive)", async () => {
+    await ctx.client.query(`CREATE TABLE test_drop_trig (id serial PRIMARY KEY, val text)`);
+    await ctx.client.query(`
+      CREATE OR REPLACE FUNCTION noop_trigger() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN RETURN NEW; END; $$
+    `);
+    await ctx.client.query(`
+      CREATE TRIGGER old_trigger BEFORE UPDATE ON test_drop_trig
+      FOR EACH ROW EXECUTE FUNCTION noop_trigger()
+    `);
+
+    // Desired has no triggers
+    const desired: TableSchema[] = [
+      {
+        table: "test_drop_trig",
+        columns: [
+          { name: "id", type: "serial", primary_key: true },
+          { name: "val", type: "text" },
+        ],
+      },
+    ];
+
+    const plan = await buildPlan(ctx.client, desired, "public");
+    // Drop should be blocked (destructive)
+    expect(plan.blocked.length).toBeGreaterThanOrEqual(1);
+    const dropOp = plan.blocked.find((o) => o.type === "drop_trigger");
+    expect(dropOp).toBeDefined();
+    expect(dropOp!.destructive).toBe(true);
+  });
+
+  it("plans safe trigger replacement when trigger definition changes", async () => {
+    await ctx.client.query(`CREATE TABLE test_replace_trig (id serial PRIMARY KEY, val text)`);
+    await ctx.client.query(`
+      CREATE OR REPLACE FUNCTION noop_trigger() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN RETURN NEW; END; $$
+    `);
+    await ctx.client.query(`
+      CREATE TRIGGER my_trigger BEFORE UPDATE ON test_replace_trig
+      FOR EACH ROW EXECUTE FUNCTION noop_trigger()
+    `);
+
+    // Desired has the same trigger name but AFTER instead of BEFORE
+    const desired: TableSchema[] = [
+      {
+        table: "test_replace_trig",
+        columns: [
+          { name: "id", type: "serial", primary_key: true },
+          { name: "val", type: "text" },
+        ],
+        triggers: [
+          {
+            name: "my_trigger",
+            timing: "AFTER",
+            events: ["UPDATE"],
+            function: "noop_trigger",
+            for_each: "ROW",
+          },
+        ],
+      },
+    ];
+
+    const plan = await buildPlan(ctx.client, desired, "public");
+    // Should have drop + create, both non-destructive (safe replacement)
+    const dropOp = plan.structureOps.find((o) => o.type === "drop_trigger");
+    const createOp = plan.structureOps.find((o) => o.type === "create_trigger");
+    expect(dropOp).toBeDefined();
+    expect(createOp).toBeDefined();
+    expect(dropOp!.destructive).toBe(false);
+    expect(createOp!.destructive).toBe(false);
+    // Nothing blocked
+    expect(plan.blocked.filter((o) => o.type === "drop_trigger")).toHaveLength(0);
+  });
+
+  it("produces empty plan when triggers match", async () => {
+    await ctx.client.query(`CREATE TABLE matched_trig (id serial PRIMARY KEY, val text NOT NULL)`);
+    await ctx.client.query(`
+      CREATE OR REPLACE FUNCTION noop_trigger() RETURNS trigger LANGUAGE plpgsql AS $$
+      BEGIN RETURN NEW; END; $$
+    `);
+    await ctx.client.query(`
+      CREATE TRIGGER my_trigger BEFORE UPDATE ON matched_trig
+      FOR EACH ROW EXECUTE FUNCTION noop_trigger()
+    `);
+
+    const desired: TableSchema[] = [
+      {
+        table: "matched_trig",
+        columns: [
+          { name: "id", type: "serial", primary_key: true },
+          { name: "val", type: "text" },
+        ],
+        triggers: [
+          {
+            name: "my_trigger",
+            timing: "BEFORE",
+            events: ["UPDATE"],
+            function: "noop_trigger",
+            for_each: "ROW",
+          },
+        ],
+      },
+    ];
+
+    const plan = await buildPlan(ctx.client, desired, "public");
+    expect(plan.operations).toHaveLength(0);
+    expect(plan.blocked).toHaveLength(0);
+  });
+
   it("plans multiple tables with correct FK ordering", async () => {
     const desired: TableSchema[] = [
       {
