@@ -1,10 +1,13 @@
 # Schema for table: posts
 # Foreign keys reference other tables — schema-flow handles the ordering.
 # Timestamps (created_at, updated_at) come from the timestamps mixin.
+# RLS ensures authors can only modify their own posts.
 
 table: posts
 
 use: [timestamps]
+
+rls: true
 
 columns:
   - name: id
@@ -44,3 +47,9 @@ indexes:
     unique: true
 
   - columns: [status, published_at]
+
+policies:
+  - name: authors_manage_own_posts
+    for: ALL
+    using: "author_id = current_setting('app.user_id')::integer"
+    check: "author_id = current_setting('app.user_id')::integer"

@@ -8,6 +8,8 @@ import {
   getTableColumns,
   getTableConstraints,
   getTableTriggers,
+  getTablePolicies,
+  getTableRLS,
   introspectTable,
 } from "../src/introspect/index.js";
 
@@ -184,5 +186,71 @@ describe("introspect", () => {
     expect(triggers[0].events).toContain("INSERT");
     expect(triggers[0].events).toContain("UPDATE");
     expect(triggers[0].events).toHaveLength(2);
+  });
+
+  it("gets table RLS status", async () => {
+    await ctx.client.query(`CREATE TABLE rls_test (id serial PRIMARY KEY)`);
+    await ctx.client.query(`ALTER TABLE rls_test ENABLE ROW LEVEL SECURITY`);
+
+    const rlsState = await getTableRLS(ctx.client, "rls_test", "public");
+    expect(rlsState.rls).toBe(true);
+    expect(rlsState.force_rls).toBe(false);
+  });
+
+  it("gets table RLS with force", async () => {
+    await ctx.client.query(`CREATE TABLE rls_force_test (id serial PRIMARY KEY)`);
+    await ctx.client.query(`ALTER TABLE rls_force_test ENABLE ROW LEVEL SECURITY`);
+    await ctx.client.query(`ALTER TABLE rls_force_test FORCE ROW LEVEL SECURITY`);
+
+    const rlsState = await getTableRLS(ctx.client, "rls_force_test", "public");
+    expect(rlsState.rls).toBe(true);
+    expect(rlsState.force_rls).toBe(true);
+  });
+
+  it("returns false for tables without RLS", async () => {
+    await ctx.client.query(`CREATE TABLE no_rls_test (id serial PRIMARY KEY)`);
+
+    const rlsState = await getTableRLS(ctx.client, "no_rls_test", "public");
+    expect(rlsState.rls).toBe(false);
+    expect(rlsState.force_rls).toBe(false);
+  });
+
+  it("gets table policies", async () => {
+    await ctx.client.query(`CREATE TABLE policy_test (id serial PRIMARY KEY, user_id integer NOT NULL)`);
+    await ctx.client.query(`ALTER TABLE policy_test ENABLE ROW LEVEL SECURITY`);
+    await ctx.client.query(
+      `CREATE POLICY users_see_own ON policy_test FOR SELECT USING (user_id = 1)`,
+    );
+
+    const policies = await getTablePolicies(ctx.client, "policy_test", "public");
+    expect(policies).toHaveLength(1);
+    expect(policies[0].name).toBe("users_see_own");
+    expect(policies[0].for).toBe("SELECT");
+    expect(policies[0].using).toBeDefined();
+  });
+
+  it("gets restrictive policies", async () => {
+    await ctx.client.query(`CREATE TABLE restrict_test (id serial PRIMARY KEY)`);
+    await ctx.client.query(`ALTER TABLE restrict_test ENABLE ROW LEVEL SECURITY`);
+    await ctx.client.query(
+      `CREATE POLICY restrictive_pol ON restrict_test AS RESTRICTIVE FOR ALL USING (true)`,
+    );
+
+    const policies = await getTablePolicies(ctx.client, "restrict_test", "public");
+    expect(policies).toHaveLength(1);
+    expect(policies[0].permissive).toBe(false);
+  });
+
+  it("introspectTable includes RLS and policies", async () => {
+    await ctx.client.query(`CREATE TABLE rls_full_test (id serial PRIMARY KEY, user_id integer NOT NULL)`);
+    await ctx.client.query(`ALTER TABLE rls_full_test ENABLE ROW LEVEL SECURITY`);
+    await ctx.client.query(
+      `CREATE POLICY test_policy ON rls_full_test FOR SELECT USING (user_id = 1)`,
+    );
+
+    const schema = await introspectTable(ctx.client, "rls_full_test", "public");
+    expect(schema.rls).toBe(true);
+    expect(schema.policies).toHaveLength(1);
+    expect(schema.policies![0].name).toBe("test_policy");
   });
 });

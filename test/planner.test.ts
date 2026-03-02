@@ -385,6 +385,190 @@ describe("planner", () => {
     expect(plan.blocked).toHaveLength(0);
   });
 
+  it("plans enable_rls and create_policy for new table with RLS", async () => {
+    const desired: TableSchema[] = [
+      {
+        table: "orders",
+        columns: [
+          { name: "id", type: "serial", primary_key: true },
+          { name: "user_id", type: "integer" },
+        ],
+        rls: true,
+        force_rls: true,
+        policies: [
+          {
+            name: "users_see_own",
+            for: "SELECT",
+            using: "user_id = 1",
+            permissive: true,
+          },
+        ],
+      },
+    ];
+
+    const plan = await buildPlan(ctx.client, desired, "public");
+    const rlsOps = plan.structureOps.filter((o) => o.type === "enable_rls");
+    expect(rlsOps.length).toBe(2); // enable + force
+    expect(rlsOps[0].sql).toContain("ENABLE ROW LEVEL SECURITY");
+    expect(rlsOps[1].sql).toContain("FORCE ROW LEVEL SECURITY");
+    expect(rlsOps.every((o) => !o.destructive)).toBe(true);
+
+    const policyOps = plan.structureOps.filter((o) => o.type === "create_policy");
+    expect(policyOps).toHaveLength(1);
+    expect(policyOps[0].sql).toContain("CREATE POLICY");
+    expect(policyOps[0].sql).toContain("users_see_own");
+    expect(policyOps[0].destructive).toBe(false);
+  });
+
+  it("plans enable_rls for existing table gaining RLS", async () => {
+    await ctx.client.query(`CREATE TABLE items (id serial PRIMARY KEY)`);
+
+    const desired: TableSchema[] = [
+      {
+        table: "items",
+        columns: [{ name: "id", type: "serial", primary_key: true }],
+        rls: true,
+      },
+    ];
+
+    const plan = await buildPlan(ctx.client, desired, "public");
+    const rlsOp = plan.structureOps.find((o) => o.type === "enable_rls");
+    expect(rlsOp).toBeDefined();
+    expect(rlsOp!.sql).toContain("ENABLE ROW LEVEL SECURITY");
+    expect(rlsOp!.destructive).toBe(false);
+  });
+
+  it("blocks disable_rls as destructive", async () => {
+    await ctx.client.query(`CREATE TABLE rls_table (id serial PRIMARY KEY)`);
+    await ctx.client.query(`ALTER TABLE rls_table ENABLE ROW LEVEL SECURITY`);
+
+    const desired: TableSchema[] = [
+      {
+        table: "rls_table",
+        columns: [{ name: "id", type: "serial", primary_key: true }],
+        // No rls: true → wants to disable
+      },
+    ];
+
+    const plan = await buildPlan(ctx.client, desired, "public");
+    const blocked = plan.blocked.filter((o) => o.type === "disable_rls");
+    expect(blocked.length).toBeGreaterThanOrEqual(1);
+    expect(blocked[0].destructive).toBe(true);
+  });
+
+  it("plans new policy as non-destructive create_policy", async () => {
+    await ctx.client.query(`CREATE TABLE pol_table (id serial PRIMARY KEY, user_id integer NOT NULL)`);
+    await ctx.client.query(`ALTER TABLE pol_table ENABLE ROW LEVEL SECURITY`);
+
+    const desired: TableSchema[] = [
+      {
+        table: "pol_table",
+        columns: [
+          { name: "id", type: "serial", primary_key: true },
+          { name: "user_id", type: "integer" },
+        ],
+        rls: true,
+        policies: [
+          {
+            name: "new_policy",
+            for: "SELECT",
+            using: "user_id = 1",
+            permissive: true,
+          },
+        ],
+      },
+    ];
+
+    const plan = await buildPlan(ctx.client, desired, "public");
+    const createOp = plan.structureOps.find((o) => o.type === "create_policy");
+    expect(createOp).toBeDefined();
+    expect(createOp!.destructive).toBe(false);
+  });
+
+  it("plans safe policy replacement when definition changes", async () => {
+    await ctx.client.query(`CREATE TABLE pol_replace (id serial PRIMARY KEY, user_id integer NOT NULL)`);
+    await ctx.client.query(`ALTER TABLE pol_replace ENABLE ROW LEVEL SECURITY`);
+    await ctx.client.query(`CREATE POLICY my_pol ON pol_replace FOR SELECT USING (user_id = 1)`);
+
+    const desired: TableSchema[] = [
+      {
+        table: "pol_replace",
+        columns: [
+          { name: "id", type: "serial", primary_key: true },
+          { name: "user_id", type: "integer" },
+        ],
+        rls: true,
+        policies: [
+          {
+            name: "my_pol",
+            for: "ALL", // changed from SELECT
+            using: "user_id = 1",
+            permissive: true,
+          },
+        ],
+      },
+    ];
+
+    const plan = await buildPlan(ctx.client, desired, "public");
+    const dropOp = plan.structureOps.find((o) => o.type === "drop_policy");
+    const createOp = plan.structureOps.find((o) => o.type === "create_policy");
+    expect(dropOp).toBeDefined();
+    expect(createOp).toBeDefined();
+    expect(dropOp!.destructive).toBe(false);
+    expect(createOp!.destructive).toBe(false);
+  });
+
+  it("blocks removed policy as destructive drop_policy", async () => {
+    await ctx.client.query(`CREATE TABLE pol_remove (id serial PRIMARY KEY)`);
+    await ctx.client.query(`ALTER TABLE pol_remove ENABLE ROW LEVEL SECURITY`);
+    await ctx.client.query(`CREATE POLICY old_pol ON pol_remove FOR SELECT USING (true)`);
+
+    const desired: TableSchema[] = [
+      {
+        table: "pol_remove",
+        columns: [{ name: "id", type: "serial", primary_key: true }],
+        rls: true,
+        // No policies → old_pol should be dropped (destructive)
+      },
+    ];
+
+    const plan = await buildPlan(ctx.client, desired, "public");
+    const blocked = plan.blocked.filter((o) => o.type === "drop_policy");
+    expect(blocked).toHaveLength(1);
+    expect(blocked[0].destructive).toBe(true);
+  });
+
+  it("produces empty plan when RLS and policies match", async () => {
+    await ctx.client.query(`CREATE TABLE rls_match (id serial PRIMARY KEY, user_id integer NOT NULL)`);
+    await ctx.client.query(`ALTER TABLE rls_match ENABLE ROW LEVEL SECURITY`);
+    await ctx.client.query(`CREATE POLICY match_pol ON rls_match FOR SELECT USING (user_id = 1)`);
+
+    const desired: TableSchema[] = [
+      {
+        table: "rls_match",
+        columns: [
+          { name: "id", type: "serial", primary_key: true },
+          { name: "user_id", type: "integer" },
+        ],
+        rls: true,
+        policies: [
+          {
+            name: "match_pol",
+            for: "SELECT",
+            using: "(user_id = 1)",
+            permissive: true,
+          },
+        ],
+      },
+    ];
+
+    const plan = await buildPlan(ctx.client, desired, "public");
+    const rlsOps = plan.operations.filter((o) => o.type === "enable_rls" || o.type === "disable_rls");
+    const policyOps = plan.operations.filter((o) => o.type === "create_policy" || o.type === "drop_policy");
+    expect(rlsOps).toHaveLength(0);
+    expect(policyOps).toHaveLength(0);
+  });
+
   it("plans multiple tables with correct FK ordering", async () => {
     const desired: TableSchema[] = [
       {

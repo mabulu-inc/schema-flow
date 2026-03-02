@@ -4,7 +4,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { parse as parseYaml } from "yaml";
-import type { TableSchema, FunctionSchema, ColumnDef, TriggerDef, MixinSchema } from "./types.js";
+import type { TableSchema, FunctionSchema, ColumnDef, TriggerDef, PolicyDef, MixinSchema } from "./types.js";
 import { logger } from "../core/logger.js";
 
 /** Parse a single column definition from raw YAML */
@@ -60,6 +60,43 @@ export function parseTriggerDef(trigger: Record<string, unknown>, filePath: stri
   };
 }
 
+const VALID_POLICY_COMMANDS = ["SELECT", "INSERT", "UPDATE", "DELETE", "ALL"];
+
+/** Parse a single RLS policy definition from raw YAML */
+export function parsePolicyDef(policy: Record<string, unknown>, filePath: string): PolicyDef {
+  if (!policy.name) {
+    throw new Error(`Each policy in ${filePath} must have "name"`);
+  }
+  if (!policy.for) {
+    throw new Error(`Policy "${policy.name}" in ${filePath} must have "for" (SELECT, INSERT, UPDATE, DELETE, or ALL)`);
+  }
+  const forValue = String(policy.for).toUpperCase();
+  if (!VALID_POLICY_COMMANDS.includes(forValue)) {
+    throw new Error(
+      `Policy "${policy.name}" in ${filePath} has invalid "for" value "${policy.for}". Must be one of: ${VALID_POLICY_COMMANDS.join(", ")}`,
+    );
+  }
+
+  // Coerce `to` to string array
+  let to: string[] | undefined;
+  if (policy.to !== undefined) {
+    if (Array.isArray(policy.to)) {
+      to = policy.to.map(String);
+    } else {
+      to = [String(policy.to)];
+    }
+  }
+
+  return {
+    name: String(policy.name),
+    for: forValue as PolicyDef["for"],
+    to,
+    using: policy.using !== undefined ? String(policy.using) : undefined,
+    check: policy.check !== undefined ? String(policy.check) : undefined,
+    permissive: policy.permissive !== undefined ? Boolean(policy.permissive) : true,
+  };
+}
+
 export function parseTableFile(filePath: string): TableSchema {
   const content = readFileSync(filePath, "utf-8");
   const raw = parseYaml(content);
@@ -102,6 +139,18 @@ export function parseTableFile(filePath: string): TableSchema {
     schema.use = raw.use as string[];
   }
 
+  if (raw.rls !== undefined) {
+    schema.rls = Boolean(raw.rls);
+  }
+
+  if (raw.force_rls !== undefined) {
+    schema.force_rls = Boolean(raw.force_rls);
+  }
+
+  if (raw.policies && Array.isArray(raw.policies)) {
+    schema.policies = raw.policies.map((p: Record<string, unknown>) => parsePolicyDef(p, filePath));
+  }
+
   logger.debug(`Parsed schema for table: ${schema.table}`, { columns: schema.columns.length });
   return schema;
 }
@@ -137,6 +186,18 @@ export function parseMixinFile(filePath: string): MixinSchema {
     schema.triggers = raw.triggers.map((t: Record<string, unknown>) => parseTriggerDef(t, filePath));
   }
 
+  if (raw.rls !== undefined) {
+    schema.rls = Boolean(raw.rls);
+  }
+
+  if (raw.force_rls !== undefined) {
+    schema.force_rls = Boolean(raw.force_rls);
+  }
+
+  if (raw.policies && Array.isArray(raw.policies)) {
+    schema.policies = raw.policies.map((p: Record<string, unknown>) => parsePolicyDef(p, filePath));
+  }
+
   logger.debug(`Parsed mixin: ${schema.mixin}`);
   return schema;
 }
@@ -152,7 +213,7 @@ export function parseFunctionFile(filePath: string): FunctionSchema {
     throw new Error(`Function schema file ${filePath} must define "name" (or "function") and "body"`);
   }
 
-  return {
+  const fn: FunctionSchema = {
     name,
     language: raw.language || "plpgsql",
     returns: raw.returns || "void",
@@ -160,4 +221,13 @@ export function parseFunctionFile(filePath: string): FunctionSchema {
     body: raw.body,
     replace: raw.replace !== false,
   };
+
+  if (raw.security !== undefined) {
+    const sec = String(raw.security).toLowerCase();
+    if (sec === "definer" || sec === "invoker") {
+      fn.security = sec;
+    }
+  }
+
+  return fn;
 }

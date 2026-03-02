@@ -142,7 +142,7 @@ npx @mabulu-inc/schema-flow <command> [options]
 | Flag | Description |
 | --- | --- |
 | `--dry-run`, `--plan`, `-n` | Preview without applying |
-| `--allow-destructive` | Allow destructive operations (column drops, type narrowing, SET NOT NULL) |
+| `--allow-destructive` | Allow destructive operations (column drops, type narrowing, SET NOT NULL, disable RLS, drop policies) |
 | `--verbose`, `-v` | Debug-level logging |
 | `--quiet`, `-q` | Suppress non-essential output |
 | `--connection-string`, `--db` | PostgreSQL connection string |
@@ -167,7 +167,13 @@ Schema-flow is designed for zero-downtime deployments. By default, it only perfo
 | Set / change default | ✓ | |
 | Create trigger | ✓ | |
 | Replace trigger (changed definition) | ✓ | |
+| Enable RLS | ✓ | |
+| Force RLS | ✓ | |
+| Create policy | ✓ | |
+| Replace policy (changed definition) | ✓ | |
 | Drop trigger (removed from YAML) | | ✓ |
+| Drop policy (removed from YAML) | | ✓ |
+| Disable RLS (removed from YAML) | | ✓ |
 | Drop column | | ✓ |
 | Narrow type (bigint → int) | | ✓ |
 | Make column NOT NULL | | ✓ |
@@ -203,10 +209,19 @@ Each table gets its own file. Everything about the table — columns, constraint
 | `name` | string | required | Column name |
 | `type` | string | required | PostgreSQL type (`serial`, `varchar(255)`, `integer`, `text`, `boolean`, `timestamptz`, `jsonb`, etc.) |
 | `nullable` | boolean | `false` | Whether the column allows NULL. Columns are NOT NULL by default. |
-| `default` | string | — | SQL default expression (e.g., `now()`, `'active'`, `true`) |
+| `default` | string | — | SQL default expression, inserted verbatim (see note below) |
 | `primary_key` | boolean | `false` | Single-column primary key |
 | `unique` | boolean | `false` | Unique constraint |
 | `references` | object | — | Foreign key definition |
+
+**`default` values** are inserted verbatim into the generated SQL, so SQL string literals need inner single quotes:
+
+```yaml
+default: now()          # → DEFAULT now()         (function call)
+default: "true"         # → DEFAULT true          (boolean)
+default: 42             # → DEFAULT 42            (number)
+default: "'draft'"      # → DEFAULT 'draft'       (string literal — note the inner quotes)
+```
 
 ### Foreign Key Properties
 
@@ -267,6 +282,73 @@ triggers:
 | `for_each` | string | `ROW` | `ROW` or `STATEMENT` |
 | `when` | string | — | Optional SQL condition |
 
+### Row-Level Security (RLS)
+
+Declare RLS policies directly on tables. Policies are diffed and managed like any other schema object.
+
+**Table properties:**
+
+| Property | Type | Default | Description |
+| --- | --- | --- | --- |
+| `rls` | boolean | `false` | Enable row-level security |
+| `force_rls` | boolean | `false` | Force RLS even for table owner |
+| `policies` | object[] | — | RLS policy definitions (see below) |
+
+**Policy properties:**
+
+| Property | Type | Default | Description |
+| --- | --- | --- | --- |
+| `name` | string | required | Policy name |
+| `for` | string | required | `SELECT`, `INSERT`, `UPDATE`, `DELETE`, or `ALL` |
+| `to` | string or string[] | `PUBLIC` | Role(s) the policy applies to |
+| `using` | string | — | USING expression |
+| `check` | string | — | WITH CHECK expression |
+| `permissive` | boolean | `true` | `false` for RESTRICTIVE policy |
+
+```yaml
+table: orders
+rls: true
+force_rls: true
+
+columns:
+  - name: id
+    type: serial
+    primary_key: true
+  - name: user_id
+    type: integer
+
+policies:
+  - name: users_see_own_orders
+    for: SELECT
+    to: app_user
+    using: "user_id = get_current_user_id()"
+
+  - name: deny_suspended
+    for: ALL
+    permissive: false
+    using: "NOT is_suspended()"
+```
+
+**Mixin example (tenant isolation):**
+
+```yaml
+# schema-flow/mixins/tenant_isolation.yaml
+mixin: tenant_isolation
+rls: true
+
+columns:
+  - name: tenant_id
+    type: uuid
+
+policies:
+  - name: "{table}_tenant_isolation"
+    for: ALL
+    using: "tenant_id = current_setting('app.tenant_id')::uuid"
+    check: "tenant_id = current_setting('app.tenant_id')::uuid"
+```
+
+When a mixin sets `rls: true`, all tables using it inherit RLS. The table can override with `rls: false`. Policy names support `{table}` interpolation, just like triggers and indexes.
+
 ### Mixins
 
 Mixins let you DRY up repeated schema patterns (timestamps, soft delete, tenant scoping, etc.). Define a mixin once in `schema-flow/mixins/`, then apply it to any table with `use:`.
@@ -311,7 +393,7 @@ The `{table}` placeholder in trigger, index, and check `name` fields is replaced
 **Merge rules:**
 
 - **Columns**: mixin columns are prepended (in `use` order), then table columns follow. If a table defines a column with the same name as a mixin column, the table's definition wins.
-- **Indexes, checks, triggers**: mixin entries are added before table entries.
+- **Indexes, checks, triggers, policies**: mixin entries are added before table entries.
 - The `use` property is stripped before planning — it's purely a composition mechanism.
 
 ### Function Schema
@@ -326,6 +408,7 @@ Functions use separate files with the `fn_` prefix (e.g., `fn_update_timestamp.y
 | `args` | string | — | Argument list (e.g., `p_id integer, p_name text`) |
 | `body` | string | required | Function body |
 | `replace` | boolean | `true` | Use `CREATE OR REPLACE` |
+| `security` | string | — | `definer` or `invoker` (default: invoker). Use `definer` for functions that need elevated privileges (e.g., RLS helper functions). |
 
 ```yaml
 # schema-flow/schema/fn_update_timestamp.yaml
@@ -337,6 +420,18 @@ body: |
     NEW.updated_at = now();
     RETURN NEW;
   END;
+```
+
+**Function with SECURITY DEFINER** (useful for RLS helper functions):
+
+```yaml
+# schema-flow/schema/fn_get_current_user_id.yaml
+name: get_current_user_id
+language: sql
+returns: integer
+security: definer
+body: |
+  SELECT id FROM users WHERE auth_id = current_setting('app.auth_id');
 ```
 
 Function files (prefixed with `fn_`) are automatically detected and applied with `CREATE OR REPLACE FUNCTION` before schema migration runs. This ensures trigger functions exist before any triggers reference them.

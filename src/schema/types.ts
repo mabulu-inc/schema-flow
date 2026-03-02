@@ -43,6 +43,21 @@ export interface TriggerDef {
   when?: string;
 }
 
+export interface PolicyDef {
+  /** Policy name */
+  name: string;
+  /** Command the policy applies to */
+  for: "SELECT" | "INSERT" | "UPDATE" | "DELETE" | "ALL";
+  /** Roles the policy applies to (omit or empty for PUBLIC) */
+  to?: string[];
+  /** USING expression */
+  using?: string;
+  /** WITH CHECK expression */
+  check?: string;
+  /** Whether the policy is permissive (default true); false = RESTRICTIVE */
+  permissive?: boolean;
+}
+
 export interface MixinSchema {
   /** Mixin name (derived from filename if not specified) */
   mixin: string;
@@ -54,6 +69,12 @@ export interface MixinSchema {
   checks?: CheckDef[];
   /** Triggers to add */
   triggers?: TriggerDef[];
+  /** Enable row-level security on tables using this mixin */
+  rls?: boolean;
+  /** Force row-level security (applies even to table owner) */
+  force_rls?: boolean;
+  /** RLS policies to add */
+  policies?: PolicyDef[];
 }
 
 export interface TableSchema {
@@ -71,6 +92,12 @@ export interface TableSchema {
   triggers?: TriggerDef[];
   /** Mixin names to apply */
   use?: string[];
+  /** Enable row-level security */
+  rls?: boolean;
+  /** Force row-level security (applies even to table owner) */
+  force_rls?: boolean;
+  /** RLS policies */
+  policies?: PolicyDef[];
 }
 
 export interface ForeignKeyAction {
@@ -90,4 +117,6 @@ export interface FunctionSchema {
   args?: string;
   body: string;
   replace?: boolean;
+  /** Security mode: "definer" generates SECURITY DEFINER, "invoker" is the default */
+  security?: "definer" | "invoker";
 }

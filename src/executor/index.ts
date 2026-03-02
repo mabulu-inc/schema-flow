@@ -140,7 +140,8 @@ export async function runMigrate(config: SchemaFlowConfig): Promise<ExecutionRes
         for (const fn of parsedFunctions) {
           const replaceClause = fn.replace ? "OR REPLACE " : "";
           const argsClause = fn.args ? `(${fn.args})` : "()";
-          const sql = `CREATE ${replaceClause}FUNCTION ${fn.name}${argsClause} RETURNS ${fn.returns} LANGUAGE ${fn.language} AS $fn_body$\n${fn.body}\n$fn_body$;`;
+          const securityClause = fn.security === "definer" ? " SECURITY DEFINER" : "";
+          const sql = `CREATE ${replaceClause}FUNCTION ${fn.name}${argsClause} RETURNS ${fn.returns} LANGUAGE ${fn.language}${securityClause} AS $fn_body$\n${fn.body}\n$fn_body$;`;
           logger.debug(`Creating function: ${fn.name}`);
           await client.query(sql);
         }

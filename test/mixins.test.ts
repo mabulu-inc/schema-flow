@@ -220,4 +220,130 @@ describe("expandMixins", () => {
     expect(result[0].columns).toHaveLength(1);
     expect(result[0].use).toBeUndefined();
   });
+
+  it("expands mixin policies with {table} interpolation", () => {
+    const mixinMap = new Map<string, MixinSchema>([
+      [
+        "tenant_isolation",
+        {
+          mixin: "tenant_isolation",
+          rls: true,
+          columns: [{ name: "tenant_id", type: "uuid" }],
+          policies: [
+            {
+              name: "{table}_tenant_isolation",
+              for: "ALL",
+              using: "tenant_id = current_setting('app.tenant_id')::uuid",
+              check: "tenant_id = current_setting('app.tenant_id')::uuid",
+              permissive: true,
+            },
+          ],
+        },
+      ],
+    ]);
+
+    const schemas: TableSchema[] = [
+      {
+        table: "orders",
+        columns: [{ name: "id", type: "serial", primary_key: true }],
+        use: ["tenant_isolation"],
+      },
+    ];
+
+    const result = expandMixins(schemas, mixinMap);
+    expect(result[0].rls).toBe(true);
+    expect(result[0].policies).toHaveLength(1);
+    expect(result[0].policies![0].name).toBe("orders_tenant_isolation");
+    expect(result[0].columns).toHaveLength(2);
+    expect(result[0].columns[0].name).toBe("tenant_id");
+  });
+
+  it("propagates mixin rls: true to table", () => {
+    const mixinMap = new Map<string, MixinSchema>([
+      [
+        "rls_mixin",
+        {
+          mixin: "rls_mixin",
+          rls: true,
+          force_rls: true,
+        },
+      ],
+    ]);
+
+    const schemas: TableSchema[] = [
+      {
+        table: "items",
+        columns: [{ name: "id", type: "serial", primary_key: true }],
+        use: ["rls_mixin"],
+      },
+    ];
+
+    const result = expandMixins(schemas, mixinMap);
+    expect(result[0].rls).toBe(true);
+    expect(result[0].force_rls).toBe(true);
+  });
+
+  it("table can override mixin rls to false", () => {
+    const mixinMap = new Map<string, MixinSchema>([
+      [
+        "rls_mixin",
+        {
+          mixin: "rls_mixin",
+          rls: true,
+        },
+      ],
+    ]);
+
+    const schemas: TableSchema[] = [
+      {
+        table: "items",
+        columns: [{ name: "id", type: "serial", primary_key: true }],
+        use: ["rls_mixin"],
+        rls: false,
+      },
+    ];
+
+    const result = expandMixins(schemas, mixinMap);
+    expect(result[0].rls).toBe(false);
+  });
+
+  it("merges mixin policies before table policies", () => {
+    const mixinMap = new Map<string, MixinSchema>([
+      [
+        "base_rls",
+        {
+          mixin: "base_rls",
+          policies: [
+            {
+              name: "mixin_policy",
+              for: "SELECT",
+              using: "true",
+              permissive: true,
+            },
+          ],
+        },
+      ],
+    ]);
+
+    const schemas: TableSchema[] = [
+      {
+        table: "items",
+        columns: [{ name: "id", type: "serial", primary_key: true }],
+        use: ["base_rls"],
+        policies: [
+          {
+            name: "table_policy",
+            for: "ALL",
+            using: "true",
+            permissive: true,
+          },
+        ],
+      },
+    ];
+
+    const result = expandMixins(schemas, mixinMap);
+    expect(result[0].policies).toHaveLength(2);
+    expect(result[0].policies![0].name).toBe("mixin_policy");
+    expect(result[0].policies![1].name).toBe("table_policy");
+  });
 });

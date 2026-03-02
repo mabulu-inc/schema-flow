@@ -248,6 +248,38 @@ export function writeMixin(mixinsDir: string, filename: string, content: string)
 }
 
 /**
+ * Check if an RLS policy exists on a table.
+ */
+export async function policyExists(
+  connectionString: string,
+  policyName: string,
+  tableName: string,
+): Promise<boolean> {
+  const res = await execSql(
+    connectionString,
+    `SELECT 1 FROM pg_policies
+     WHERE schemaname = 'public' AND policyname = $1 AND tablename = $2`,
+    [policyName, tableName],
+  );
+  return res.rowCount !== null && res.rowCount > 0;
+}
+
+/**
+ * Check if row-level security is enabled on a table.
+ */
+export async function rlsEnabled(connectionString: string, tableName: string): Promise<boolean> {
+  const res = await execSql(
+    connectionString,
+    `SELECT c.relrowsecurity
+     FROM pg_class c
+     JOIN pg_namespace n ON c.relnamespace = n.oid
+     WHERE n.nspname = 'public' AND c.relname = $1`,
+    [tableName],
+  );
+  return res.rows.length > 0 && res.rows[0].relrowsecurity === true;
+}
+
+/**
  * Lifecycle helper for tests using the app's module-level pool (executor, scaffold, cli).
  * Registers vitest beforeEach/afterEach hooks internally.
  * Returns a mutable context object populated before each test.

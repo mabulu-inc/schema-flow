@@ -3,7 +3,7 @@
 // Key design: CREATE TABLEs first (without FKs), then ALTER TABLEs for FKs last
 // Safety: destructive operations (drops, narrowing changes) are blocked by default
 
-import type { TableSchema, ColumnDef, IndexDef, TriggerDef } from "../schema/types.js";
+import type { TableSchema, ColumnDef, IndexDef, TriggerDef, PolicyDef } from "../schema/types.js";
 import { introspectTable, getExistingTables } from "../introspect/index.js";
 import { logger } from "../core/logger.js";
 import pg from "pg";
@@ -21,7 +21,11 @@ export type OperationType =
   | "drop_table"
   | "create_function"
   | "create_trigger"
-  | "drop_trigger";
+  | "drop_trigger"
+  | "enable_rls"
+  | "disable_rls"
+  | "create_policy"
+  | "drop_policy";
 
 export interface Operation {
   type: OperationType;
@@ -233,6 +237,18 @@ function planCreateTable(schema: TableSchema, pgSchema: string): Operation[] {
     }
   }
 
+  // RLS
+  if (schema.rls) {
+    ops.push(...planEnableRLS(schema.table, pgSchema, schema.force_rls === true));
+  }
+
+  // Policies
+  if (schema.policies) {
+    for (const policy of schema.policies) {
+      ops.push(planCreatePolicy(schema.table, policy, pgSchema));
+    }
+  }
+
   // FK ops come last
   ops.push(...fkOps);
 
@@ -300,6 +316,15 @@ async function planAlterTable(client: pg.PoolClient, desired: TableSchema, pgSch
   // Trigger diff
   const triggerOps = planTriggerDiff(desired.table, desired.triggers || [], current.triggers || [], pgSchema);
   ops.push(...triggerOps);
+
+  // RLS diff
+  const currentRls = { rls: current.rls === true, force_rls: current.force_rls === true };
+  const rlsOps = planRLSDiff(desired.table, desired, currentRls, pgSchema);
+  ops.push(...rlsOps);
+
+  // Policy diff
+  const policyOps = planPolicyDiff(desired.table, desired.policies || [], current.policies || [], pgSchema);
+  ops.push(...policyOps);
 
   return ops;
 }
@@ -459,6 +484,186 @@ function planTriggerDiff(
     if (!desiredMap.has(c.name)) {
       ops.push(planDropTrigger(tableName, c.name, pgSchema, true));
     }
+  }
+
+  return ops;
+}
+
+function planEnableRLS(tableName: string, pgSchema: string, force: boolean): Operation[] {
+  const ops: Operation[] = [];
+  ops.push({
+    type: "enable_rls",
+    table: tableName,
+    sql: `ALTER TABLE "${pgSchema}"."${tableName}" ENABLE ROW LEVEL SECURITY;`,
+    description: `Enable RLS on ${tableName}`,
+    phase: "structure",
+    destructive: false,
+  });
+  if (force) {
+    ops.push({
+      type: "enable_rls",
+      table: tableName,
+      sql: `ALTER TABLE "${pgSchema}"."${tableName}" FORCE ROW LEVEL SECURITY;`,
+      description: `Force RLS on ${tableName}`,
+      phase: "structure",
+      destructive: false,
+    });
+  }
+  return ops;
+}
+
+function planDisableRLS(tableName: string, pgSchema: string): Operation[] {
+  const ops: Operation[] = [];
+  ops.push({
+    type: "disable_rls",
+    table: tableName,
+    sql: `ALTER TABLE "${pgSchema}"."${tableName}" NO FORCE ROW LEVEL SECURITY;`,
+    description: `Remove force RLS on ${tableName}`,
+    phase: "structure",
+    destructive: true,
+  });
+  ops.push({
+    type: "disable_rls",
+    table: tableName,
+    sql: `ALTER TABLE "${pgSchema}"."${tableName}" DISABLE ROW LEVEL SECURITY;`,
+    description: `Disable RLS on ${tableName}`,
+    phase: "structure",
+    destructive: true,
+  });
+  return ops;
+}
+
+function planCreatePolicy(tableName: string, policy: PolicyDef, pgSchema: string): Operation {
+  const permissive = policy.permissive === false ? "RESTRICTIVE" : "PERMISSIVE";
+  const forClause = policy.for;
+  const toClause = policy.to && policy.to.length > 0 ? policy.to.join(", ") : "PUBLIC";
+  let sql = `CREATE POLICY "${policy.name}" ON "${pgSchema}"."${tableName}" AS ${permissive} FOR ${forClause} TO ${toClause}`;
+  if (policy.using) {
+    sql += ` USING (${policy.using})`;
+  }
+  if (policy.check) {
+    sql += ` WITH CHECK (${policy.check})`;
+  }
+  sql += ";";
+
+  return {
+    type: "create_policy",
+    table: tableName,
+    sql,
+    description: `Create policy ${policy.name} on ${tableName}`,
+    phase: "structure",
+    destructive: false,
+  };
+}
+
+function planDropPolicy(tableName: string, policyName: string, pgSchema: string, destructive: boolean): Operation {
+  return {
+    type: "drop_policy",
+    table: tableName,
+    sql: `DROP POLICY IF EXISTS "${policyName}" ON "${pgSchema}"."${tableName}";`,
+    description: `Drop policy ${policyName} on ${tableName}`,
+    phase: "structure",
+    destructive,
+  };
+}
+
+function planPolicyDiff(
+  tableName: string,
+  desired: PolicyDef[],
+  current: PolicyDef[],
+  pgSchema: string,
+): Operation[] {
+  const ops: Operation[] = [];
+  const currentMap = new Map(current.map((p) => [p.name, p]));
+  const desiredMap = new Map(desired.map((p) => [p.name, p]));
+
+  // New or changed policies
+  for (const d of desired) {
+    const c = currentMap.get(d.name);
+    if (!c) {
+      // New policy
+      ops.push(planCreatePolicy(tableName, d, pgSchema));
+    } else {
+      // Check if changed
+      const currentPermissive = c.permissive !== false;
+      const desiredPermissive = d.permissive !== false;
+      const changed =
+        c.for !== d.for ||
+        (c.using || "") !== (d.using || "") ||
+        (c.check || "") !== (d.check || "") ||
+        currentPermissive !== desiredPermissive ||
+        JSON.stringify(c.to || []) !== JSON.stringify(d.to || []);
+
+      if (changed) {
+        // Drop and recreate — both non-destructive (safe replacement)
+        ops.push(planDropPolicy(tableName, d.name, pgSchema, false));
+        ops.push(planCreatePolicy(tableName, d, pgSchema));
+      }
+    }
+  }
+
+  // Removed policies (in DB but not in YAML) → destructive
+  for (const c of current) {
+    if (!desiredMap.has(c.name)) {
+      ops.push(planDropPolicy(tableName, c.name, pgSchema, true));
+    }
+  }
+
+  return ops;
+}
+
+function planRLSDiff(
+  tableName: string,
+  desired: { rls?: boolean; force_rls?: boolean },
+  current: { rls: boolean; force_rls: boolean },
+  pgSchema: string,
+): Operation[] {
+  const ops: Operation[] = [];
+  const desiredRls = desired.rls === true;
+  const desiredForce = desired.force_rls === true;
+
+  if (desiredRls && !current.rls) {
+    // Enable RLS
+    ops.push({
+      type: "enable_rls",
+      table: tableName,
+      sql: `ALTER TABLE "${pgSchema}"."${tableName}" ENABLE ROW LEVEL SECURITY;`,
+      description: `Enable RLS on ${tableName}`,
+      phase: "structure",
+      destructive: false,
+    });
+  } else if (!desiredRls && current.rls) {
+    // Disable RLS — destructive
+    ops.push({
+      type: "disable_rls",
+      table: tableName,
+      sql: `ALTER TABLE "${pgSchema}"."${tableName}" DISABLE ROW LEVEL SECURITY;`,
+      description: `Disable RLS on ${tableName}`,
+      phase: "structure",
+      destructive: true,
+    });
+  }
+
+  if (desiredForce && !current.force_rls) {
+    // Force RLS — non-destructive
+    ops.push({
+      type: "enable_rls",
+      table: tableName,
+      sql: `ALTER TABLE "${pgSchema}"."${tableName}" FORCE ROW LEVEL SECURITY;`,
+      description: `Force RLS on ${tableName}`,
+      phase: "structure",
+      destructive: false,
+    });
+  } else if (!desiredForce && current.force_rls) {
+    // Remove force RLS — destructive
+    ops.push({
+      type: "disable_rls",
+      table: tableName,
+      sql: `ALTER TABLE "${pgSchema}"."${tableName}" NO FORCE ROW LEVEL SECURITY;`,
+      description: `Remove force RLS on ${tableName}`,
+      phase: "structure",
+      destructive: true,
+    });
   }
 
   return ops;

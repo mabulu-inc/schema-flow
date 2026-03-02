@@ -1,0 +1,10 @@
+# Function: get_current_user_id
+# Returns the current user's ID from a session variable.
+# Uses SECURITY DEFINER so it can query RLS-protected tables.
+
+name: get_current_user_id
+language: sql
+returns: integer
+security: definer
+body: |
+  SELECT id FROM users WHERE auth_id = current_setting('app.auth_id');

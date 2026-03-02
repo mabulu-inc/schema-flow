@@ -11,6 +11,8 @@ import {
   fkExists,
   triggerExists,
   functionExists,
+  policyExists,
+  rlsEnabled,
   execSql,
   useTestProject,
 } from "./helpers.js";
@@ -523,6 +525,154 @@ triggers:
 
     // Table should NOT exist (dry run)
     expect(await tableExists(ctx.connectionString, "items")).toBe(false);
+  });
+
+  it("creates table with RLS and policies", async () => {
+    writeSchema(
+      ctx.project.schemaDir,
+      "orders.yaml",
+      `table: orders
+rls: true
+columns:
+  - name: id
+    type: serial
+    primary_key: true
+  - name: user_id
+    type: integer
+policies:
+  - name: users_see_own_orders
+    for: SELECT
+    using: "user_id = 1"
+`,
+    );
+
+    const config = resolveConfig({
+      connectionString: ctx.connectionString,
+      baseDir: ctx.project.baseDir,
+      dryRun: false,
+    });
+
+    const result = await runMigrate(config);
+    expect(result.success).toBe(true);
+
+    expect(await tableExists(ctx.connectionString, "orders")).toBe(true);
+    expect(await rlsEnabled(ctx.connectionString, "orders")).toBe(true);
+    expect(await policyExists(ctx.connectionString, "users_see_own_orders", "orders")).toBe(true);
+  });
+
+  it("creates function with SECURITY DEFINER", async () => {
+    writeSchema(
+      ctx.project.schemaDir,
+      "fn_get_user.yaml",
+      `name: get_current_user_id
+language: sql
+returns: integer
+security: definer
+body: SELECT 1
+`,
+    );
+
+    const config = resolveConfig({
+      connectionString: ctx.connectionString,
+      baseDir: ctx.project.baseDir,
+      dryRun: false,
+    });
+
+    const result = await runMigrate(config);
+    expect(result.success).toBe(true);
+    expect(await functionExists(ctx.connectionString, "get_current_user_id")).toBe(true);
+
+    // Verify it is SECURITY DEFINER
+    const res = await execSql(
+      ctx.connectionString,
+      `SELECT security_type FROM information_schema.routines
+       WHERE routine_schema = 'public' AND routine_name = 'get_current_user_id'`,
+    );
+    expect(res.rows[0].security_type).toBe("DEFINER");
+  });
+
+  it("applies mixin with tenant isolation pattern", async () => {
+    writeMixin(
+      ctx.project.mixinsDir,
+      "tenant_isolation.yaml",
+      `mixin: tenant_isolation
+rls: true
+columns:
+  - name: tenant_id
+    type: uuid
+    default: "'00000000-0000-0000-0000-000000000000'"
+policies:
+  - name: "{table}_tenant_isolation"
+    for: ALL
+    using: "tenant_id IS NOT NULL"
+    check: "tenant_id IS NOT NULL"
+`,
+    );
+
+    writeSchema(
+      ctx.project.schemaDir,
+      "items.yaml",
+      `table: items
+use: [tenant_isolation]
+columns:
+  - name: id
+    type: serial
+    primary_key: true
+  - name: name
+    type: text
+`,
+    );
+
+    const config = resolveConfig({
+      connectionString: ctx.connectionString,
+      baseDir: ctx.project.baseDir,
+      dryRun: false,
+    });
+
+    const result = await runMigrate(config);
+    expect(result.success).toBe(true);
+
+    expect(await tableExists(ctx.connectionString, "items")).toBe(true);
+    expect(await rlsEnabled(ctx.connectionString, "items")).toBe(true);
+    expect(await policyExists(ctx.connectionString, "items_tenant_isolation", "items")).toBe(true);
+    const cols = await getColumns(ctx.connectionString, "items");
+    expect(cols).toContain("tenant_id");
+  });
+
+  it("idempotent second run with RLS", async () => {
+    writeSchema(
+      ctx.project.schemaDir,
+      "rls_idem.yaml",
+      `table: rls_idem
+rls: true
+columns:
+  - name: id
+    type: serial
+    primary_key: true
+  - name: user_id
+    type: integer
+policies:
+  - name: idem_policy
+    for: SELECT
+    using: "user_id = 1"
+`,
+    );
+
+    const config = resolveConfig({
+      connectionString: ctx.connectionString,
+      baseDir: ctx.project.baseDir,
+      dryRun: false,
+    });
+
+    const first = await runMigrate(config);
+    expect(first.success).toBe(true);
+    expect(first.operationsExecuted).toBeGreaterThan(0);
+
+    await closePool();
+
+    const second = await runMigrate(config);
+    expect(second.success).toBe(true);
+    expect(second.operationsExecuted).toBe(0);
   });
 
   it("idempotent second run with triggers", async () => {

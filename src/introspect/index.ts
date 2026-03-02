@@ -2,7 +2,7 @@
 // Introspect the current PostgreSQL database state
 
 import pg from "pg";
-import type { TableSchema, ColumnDef, TriggerDef } from "../schema/types.js";
+import type { TableSchema, ColumnDef, TriggerDef, PolicyDef } from "../schema/types.js";
 
 export interface DbColumn {
   column_name: string;
@@ -37,6 +37,7 @@ export interface DbFunction {
   external_language: string;
   routine_definition: string;
   parameter_list: string;
+  security_type: string;
 }
 
 export interface DbTrigger {
@@ -101,6 +102,94 @@ export function dbTriggersToTriggerDefs(rows: DbTrigger[]): TriggerDef[] {
   }
 
   return triggers;
+}
+
+export interface DbPolicy {
+  policyname: string;
+  cmd: string;
+  permissive: string;
+  roles: string[] | string;
+  qual: string | null;
+  with_check: string | null;
+}
+
+/** Get RLS policies for a table */
+export async function getTablePolicies(
+  client: pg.PoolClient,
+  tableName: string,
+  pgSchema: string,
+): Promise<PolicyDef[]> {
+  const res = await client.query<DbPolicy>(
+    `SELECT
+       policyname,
+       cmd,
+       permissive,
+       roles,
+       qual,
+       with_check
+     FROM pg_policies
+     WHERE schemaname = $1 AND tablename = $2
+     ORDER BY policyname`,
+    [pgSchema, tableName],
+  );
+
+  return res.rows.map((row) => {
+    const policy: PolicyDef = {
+      name: row.policyname,
+      for: row.cmd as PolicyDef["for"],
+      permissive: row.permissive === "PERMISSIVE",
+    };
+
+    // Map roles — pg_policies returns name[] which pg may deliver as string[] or a raw string
+    let roles: string[];
+    if (Array.isArray(row.roles)) {
+      roles = row.roles;
+    } else if (typeof row.roles === "string") {
+      // Parse PostgreSQL array literal like "{role1,role2}"
+      roles = row.roles.replace(/^\{|\}$/g, "").split(",").filter(Boolean);
+    } else {
+      roles = [];
+    }
+    if (roles.length > 0) {
+      const filtered = roles.filter((r) => r.toLowerCase() !== "public");
+      if (filtered.length > 0) {
+        policy.to = filtered;
+      }
+    }
+
+    if (row.qual) {
+      policy.using = row.qual;
+    }
+    if (row.with_check) {
+      policy.check = row.with_check;
+    }
+
+    return policy;
+  });
+}
+
+/** Get RLS status for a table */
+export async function getTableRLS(
+  client: pg.PoolClient,
+  tableName: string,
+  pgSchema: string,
+): Promise<{ rls: boolean; force_rls: boolean }> {
+  const res = await client.query(
+    `SELECT c.relrowsecurity, c.relforcerowsecurity
+     FROM pg_class c
+     JOIN pg_namespace n ON c.relnamespace = n.oid
+     WHERE n.nspname = $1 AND c.relname = $2`,
+    [pgSchema, tableName],
+  );
+
+  if (res.rows.length === 0) {
+    return { rls: false, force_rls: false };
+  }
+
+  return {
+    rls: res.rows[0].relrowsecurity,
+    force_rls: res.rows[0].relforcerowsecurity,
+  };
 }
 
 /** Get all user tables in the schema */
@@ -276,6 +365,21 @@ export async function introspectTable(
     schema.triggers = triggers;
   }
 
+  // Introspect RLS
+  const rlsState = await getTableRLS(client, tableName, pgSchema);
+  if (rlsState.rls) {
+    schema.rls = true;
+  }
+  if (rlsState.force_rls) {
+    schema.force_rls = true;
+  }
+
+  // Introspect policies
+  const policies = await getTablePolicies(client, tableName, pgSchema);
+  if (policies.length > 0) {
+    schema.policies = policies;
+  }
+
   return schema;
 }
 
@@ -288,6 +392,7 @@ export async function getExistingFunctions(client: pg.PoolClient, pgSchema: stri
        r.data_type,
        r.external_language,
        r.routine_definition,
+       r.security_type,
        COALESCE(
          string_agg(p.parameter_name || ' ' || p.data_type, ', ' ORDER BY p.ordinal_position),
          ''
@@ -298,7 +403,7 @@ export async function getExistingFunctions(client: pg.PoolClient, pgSchema: stri
      WHERE r.routine_schema = $1
        AND r.routine_type = 'FUNCTION'
        AND r.routine_name NOT LIKE 'pg_%'
-     GROUP BY r.routine_name, r.routine_type, r.data_type, r.external_language, r.routine_definition
+     GROUP BY r.routine_name, r.routine_type, r.data_type, r.external_language, r.routine_definition, r.security_type
      ORDER BY r.routine_name`,
     [pgSchema],
   );

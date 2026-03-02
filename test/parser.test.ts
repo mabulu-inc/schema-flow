@@ -5,7 +5,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { writeFileSync } from "node:fs";
 import path from "node:path";
 import { createTempProject } from "./helpers.js";
-import { parseTableFile, parseFunctionFile, parseMixinFile } from "../src/schema/parser.js";
+import { parseTableFile, parseFunctionFile, parseMixinFile, parsePolicyDef } from "../src/schema/parser.js";
 
 describe("parseTableFile", () => {
   let project: ReturnType<typeof createTempProject>;
@@ -343,5 +343,170 @@ indexes:
     const mixin = parseMixinFile(filePath);
     expect(mixin.indexes).toHaveLength(1);
     expect(mixin.indexes![0].name).toBe("idx_{table}_active");
+  });
+
+  it("parses a mixin with rls and policies", () => {
+    const filePath = path.join(project.mixinsDir, "tenant_isolation.yaml");
+    writeFileSync(
+      filePath,
+      `mixin: tenant_isolation
+rls: true
+columns:
+  - name: tenant_id
+    type: uuid
+policies:
+  - name: "{table}_tenant_isolation"
+    for: ALL
+    using: "tenant_id = current_setting('app.tenant_id')::uuid"
+    check: "tenant_id = current_setting('app.tenant_id')::uuid"
+`,
+      "utf-8",
+    );
+
+    const mixin = parseMixinFile(filePath);
+    expect(mixin.rls).toBe(true);
+    expect(mixin.policies).toHaveLength(1);
+    expect(mixin.policies![0].name).toBe("{table}_tenant_isolation");
+    expect(mixin.policies![0].for).toBe("ALL");
+    expect(mixin.policies![0].using).toContain("tenant_id");
+  });
+});
+
+describe("parsePolicyDef", () => {
+  it("validates required fields", () => {
+    expect(() => parsePolicyDef({}, "test.yaml")).toThrow('must have "name"');
+    expect(() => parsePolicyDef({ name: "p1" }, "test.yaml")).toThrow('must have "for"');
+    expect(() => parsePolicyDef({ name: "p1", for: "INVALID" }, "test.yaml")).toThrow("invalid");
+  });
+
+  it("parses a valid policy with defaults", () => {
+    const policy = parsePolicyDef(
+      { name: "my_policy", for: "SELECT", using: "true" },
+      "test.yaml",
+    );
+    expect(policy.name).toBe("my_policy");
+    expect(policy.for).toBe("SELECT");
+    expect(policy.using).toBe("true");
+    expect(policy.permissive).toBe(true);
+    expect(policy.to).toBeUndefined();
+    expect(policy.check).toBeUndefined();
+  });
+
+  it("coerces to as string to array", () => {
+    const policy = parsePolicyDef(
+      { name: "p", for: "ALL", to: "app_user" },
+      "test.yaml",
+    );
+    expect(policy.to).toEqual(["app_user"]);
+  });
+
+  it("accepts to as array", () => {
+    const policy = parsePolicyDef(
+      { name: "p", for: "ALL", to: ["role1", "role2"] },
+      "test.yaml",
+    );
+    expect(policy.to).toEqual(["role1", "role2"]);
+  });
+
+  it("parses permissive: false as RESTRICTIVE", () => {
+    const policy = parsePolicyDef(
+      { name: "p", for: "ALL", permissive: false, using: "true" },
+      "test.yaml",
+    );
+    expect(policy.permissive).toBe(false);
+  });
+});
+
+describe("parseTableFile with RLS", () => {
+  let project: ReturnType<typeof createTempProject>;
+
+  beforeEach(() => {
+    project = createTempProject();
+  });
+
+  afterEach(() => {
+    project.cleanup();
+  });
+
+  it("parses rls, force_rls, and policies", () => {
+    const filePath = path.join(project.schemaDir, "orders.yaml");
+    writeFileSync(
+      filePath,
+      `table: orders
+rls: true
+force_rls: true
+columns:
+  - name: id
+    type: serial
+    primary_key: true
+  - name: user_id
+    type: integer
+policies:
+  - name: users_see_own_orders
+    for: SELECT
+    to: app_user
+    using: "user_id = get_current_user_id()"
+  - name: deny_suspended
+    for: ALL
+    permissive: false
+    using: "NOT is_suspended()"
+`,
+      "utf-8",
+    );
+
+    const schema = parseTableFile(filePath);
+    expect(schema.rls).toBe(true);
+    expect(schema.force_rls).toBe(true);
+    expect(schema.policies).toHaveLength(2);
+    expect(schema.policies![0].name).toBe("users_see_own_orders");
+    expect(schema.policies![0].for).toBe("SELECT");
+    expect(schema.policies![0].to).toEqual(["app_user"]);
+    expect(schema.policies![1].permissive).toBe(false);
+  });
+});
+
+describe("parseFunctionFile with security", () => {
+  let project: ReturnType<typeof createTempProject>;
+
+  beforeEach(() => {
+    project = createTempProject();
+  });
+
+  afterEach(() => {
+    project.cleanup();
+  });
+
+  it("parses security: definer", () => {
+    const filePath = path.join(project.schemaDir, "fn_get_user.yaml");
+    writeFileSync(
+      filePath,
+      `name: get_current_user_id
+language: sql
+returns: integer
+security: definer
+body: |
+  SELECT id FROM users WHERE auth_id = current_setting('app.auth_id');
+`,
+      "utf-8",
+    );
+
+    const fn = parseFunctionFile(filePath);
+    expect(fn.security).toBe("definer");
+  });
+
+  it("defaults to no security field when not specified", () => {
+    const filePath = path.join(project.schemaDir, "fn_basic.yaml");
+    writeFileSync(
+      filePath,
+      `name: basic_fn
+language: sql
+returns: void
+body: SELECT 1
+`,
+      "utf-8",
+    );
+
+    const fn = parseFunctionFile(filePath);
+    expect(fn.security).toBeUndefined();
   });
 });

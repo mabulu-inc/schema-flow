@@ -4,7 +4,7 @@
 import { existsSync } from "node:fs";
 import { glob } from "glob";
 import path from "node:path";
-import type { TableSchema, MixinSchema, ColumnDef, IndexDef, CheckDef, TriggerDef } from "./types.js";
+import type { TableSchema, MixinSchema, ColumnDef, IndexDef, CheckDef, TriggerDef, PolicyDef } from "./types.js";
 import { parseMixinFile } from "./parser.js";
 import { logger } from "../core/logger.js";
 
@@ -62,6 +62,9 @@ export function expandMixins(schemas: TableSchema[], mixinMap: Map<string, Mixin
     const mixinIndexes: IndexDef[] = [];
     const mixinChecks: CheckDef[] = [];
     const mixinTriggers: TriggerDef[] = [];
+    const mixinPolicies: PolicyDef[] = [];
+    let mixinRls = false;
+    let mixinForceRls = false;
 
     for (const mixinName of schema.use) {
       const mixin = mixinMap.get(mixinName);
@@ -96,6 +99,20 @@ export function expandMixins(schemas: TableSchema[], mixinMap: Map<string, Mixin
           });
         }
       }
+      if (mixin.policies) {
+        for (const pol of mixin.policies) {
+          mixinPolicies.push({
+            ...pol,
+            name: interpolateNames(pol.name, schema.table),
+          });
+        }
+      }
+      if (mixin.rls) {
+        mixinRls = true;
+      }
+      if (mixin.force_rls) {
+        mixinForceRls = true;
+      }
     }
 
     // Merge columns: mixin first, table overrides on name clash
@@ -105,7 +122,7 @@ export function expandMixins(schemas: TableSchema[], mixinMap: Map<string, Mixin
       ...schema.columns,
     ];
 
-    // Merge indexes, checks, triggers: mixin entries before table entries
+    // Merge indexes, checks, triggers, policies: mixin entries before table entries
     const mergedIndexes =
       mixinIndexes.length > 0 || schema.indexes
         ? [...mixinIndexes, ...(schema.indexes || [])]
@@ -121,7 +138,16 @@ export function expandMixins(schemas: TableSchema[], mixinMap: Map<string, Mixin
         ? [...mixinTriggers, ...(schema.triggers || [])]
         : undefined;
 
+    const mergedPolicies =
+      mixinPolicies.length > 0 || schema.policies
+        ? [...mixinPolicies, ...(schema.policies || [])]
+        : undefined;
+
     const { use: _, ...rest } = schema;
+
+    // RLS flags: table can override mixin, but mixin sets the default
+    const mergedRls = schema.rls !== undefined ? schema.rls : mixinRls || undefined;
+    const mergedForceRls = schema.force_rls !== undefined ? schema.force_rls : mixinForceRls || undefined;
 
     return {
       ...rest,
@@ -129,6 +155,9 @@ export function expandMixins(schemas: TableSchema[], mixinMap: Map<string, Mixin
       indexes: mergedIndexes,
       checks: mergedChecks,
       triggers: mergedTriggers,
+      ...(mergedRls !== undefined ? { rls: mergedRls } : {}),
+      ...(mergedForceRls !== undefined ? { force_rls: mergedForceRls } : {}),
+      policies: mergedPolicies,
     };
   });
 }
