@@ -32,13 +32,9 @@ export function formatMigrationSql(
   const version = options.version || "1.0.0";
   const pgSchema = options.pgSchema || "public";
 
-  const tables = [
-    ...plan.summary.tablesToCreate,
-    ...plan.summary.tablesToAlter,
-  ];
+  const tables = [...plan.summary.tablesToCreate, ...plan.summary.tablesToAlter];
   const tableList = tables.length > 0 ? tables.join(", ") : "(none)";
-  const totalOps =
-    functions.length + plan.structureOps.length + plan.foreignKeyOps.length + plan.validateOps.length;
+  const totalOps = functions.length + plan.structureOps.length + plan.foreignKeyOps.length + plan.validateOps.length;
 
   const lines: string[] = [];
 
@@ -67,12 +63,8 @@ export function formatMigrationSql(
   }
 
   // Separate index ops from non-index structure ops
-  const indexOps = plan.structureOps.filter(
-    (o) => o.type === "add_index" || o.type === "add_unique_index",
-  );
-  const nonIndexOps = plan.structureOps.filter(
-    (o) => o.type !== "add_index" && o.type !== "add_unique_index",
-  );
+  const indexOps = plan.structureOps.filter((o) => o.type === "add_index" || o.type === "add_unique_index");
+  const nonIndexOps = plan.structureOps.filter((o) => o.type !== "add_index" && o.type !== "add_unique_index");
 
   // Structure ops (non-index) in a transaction
   if (nonIndexOps.length > 0) {
@@ -150,8 +142,7 @@ export function generateSqlFile(
     pgSchema: options.pgSchema,
   });
 
-  const totalOps =
-    functions.length + plan.structureOps.length + plan.foreignKeyOps.length + plan.validateOps.length;
+  const totalOps = functions.length + plan.structureOps.length + plan.foreignKeyOps.length + plan.validateOps.length;
 
   writeFileSync(filePath, sql, "utf-8");
 

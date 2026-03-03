@@ -11,10 +11,14 @@ describe("views", () => {
     it("parses a valid view file", () => {
       const project = createTempProject();
       try {
-        const filePath = writeSchema(project.schemaDir, "view_active_users.yaml", `
+        const filePath = writeSchema(
+          project.schemaDir,
+          "view_active_users.yaml",
+          `
 view: active_users
 query: "SELECT id, name FROM users WHERE active = true"
-`);
+`,
+        );
         const result = parseViewFile(filePath);
         expect(result.name).toBe("active_users");
         expect(result.query).toContain("SELECT");
@@ -27,7 +31,7 @@ query: "SELECT id, name FROM users WHERE active = true"
       const project = createTempProject();
       try {
         const filePath = writeSchema(project.schemaDir, "bad.yaml", `query: "SELECT 1"`);
-        expect(() => parseViewFile(filePath)).toThrow("expected \"view\" key");
+        expect(() => parseViewFile(filePath)).toThrow('expected "view" key');
       } finally {
         project.cleanup();
       }
@@ -36,13 +40,17 @@ query: "SELECT id, name FROM users WHERE active = true"
     it("parses a valid materialized view file", () => {
       const project = createTempProject();
       try {
-        const filePath = writeSchema(project.schemaDir, "mv_stats.yaml", `
+        const filePath = writeSchema(
+          project.schemaDir,
+          "mv_stats.yaml",
+          `
 materialized_view: daily_stats
 query: "SELECT count(*) as total FROM events"
 indexes:
   - columns: [total]
     unique: true
-`);
+`,
+        );
         const result = parseMaterializedViewFile(filePath);
         expect(result.name).toBe("daily_stats");
         expect(result.query).toContain("SELECT");
@@ -56,7 +64,7 @@ indexes:
       const project = createTempProject();
       try {
         const filePath = writeSchema(project.schemaDir, "bad.yaml", `query: "SELECT 1"`);
-        expect(() => parseMaterializedViewFile(filePath)).toThrow("expected \"materialized_view\" key");
+        expect(() => parseMaterializedViewFile(filePath)).toThrow('expected "materialized_view" key');
       } finally {
         project.cleanup();
       }
@@ -67,15 +75,23 @@ indexes:
     it("plans create_view for a new view", async () => {
       await ctx.client.query(`CREATE TABLE users (id serial PRIMARY KEY, name text, active boolean)`);
 
-      const plan = await buildPlan(ctx.client, [
-        { table: "users", columns: [
-          { name: "id", type: "serial", primary_key: true },
-          { name: "name", type: "text" },
-          { name: "active", type: "boolean" },
-        ]},
-      ], "public", {
-        views: [{ name: "active_users", query: "SELECT id, name FROM users WHERE active = true" }],
-      });
+      const plan = await buildPlan(
+        ctx.client,
+        [
+          {
+            table: "users",
+            columns: [
+              { name: "id", type: "serial", primary_key: true },
+              { name: "name", type: "text" },
+              { name: "active", type: "boolean" },
+            ],
+          },
+        ],
+        "public",
+        {
+          views: [{ name: "active_users", query: "SELECT id, name FROM users WHERE active = true" }],
+        },
+      );
       const createOp = plan.structureOps.find((o) => o.type === "create_view");
       expect(createOp).toBeDefined();
       expect(createOp!.sql).toContain("CREATE OR REPLACE VIEW");
@@ -86,14 +102,22 @@ indexes:
     it("plans create_materialized_view for a new mat view", async () => {
       await ctx.client.query(`CREATE TABLE events (id serial PRIMARY KEY, created_at timestamptz)`);
 
-      const plan = await buildPlan(ctx.client, [
-        { table: "events", columns: [
-          { name: "id", type: "serial", primary_key: true },
-          { name: "created_at", type: "timestamptz" },
-        ]},
-      ], "public", {
-        materializedViews: [{ name: "event_counts", query: "SELECT count(*) FROM events" }],
-      });
+      const plan = await buildPlan(
+        ctx.client,
+        [
+          {
+            table: "events",
+            columns: [
+              { name: "id", type: "serial", primary_key: true },
+              { name: "created_at", type: "timestamptz" },
+            ],
+          },
+        ],
+        "public",
+        {
+          materializedViews: [{ name: "event_counts", query: "SELECT count(*) FROM events" }],
+        },
+      );
       const createOp = plan.structureOps.find((o) => o.type === "create_materialized_view");
       expect(createOp).toBeDefined();
       expect(createOp!.sql).toContain("CREATE MATERIALIZED VIEW");

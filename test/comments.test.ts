@@ -1,8 +1,25 @@
 import { describe, it, expect } from "vitest";
 import { useTestClient, createTempProject, writeSchema } from "./helpers.js";
-import { parseTableFile, parseEnumFile, parseViewFile, parseMaterializedViewFile, parseFunctionFile } from "../src/schema/parser.js";
+import {
+  parseTableFile,
+  parseEnumFile,
+  parseViewFile,
+  parseMaterializedViewFile,
+  parseFunctionFile,
+} from "../src/schema/parser.js";
 import { buildPlan } from "../src/planner/index.js";
-import { getTableComment, getColumnComments, getEnumComment, getViewComment, getMaterializedViewComment, getFunctionComment, getIndexComments, getTriggerComments, getConstraintComments, getPolicyComments } from "../src/introspect/index.js";
+import {
+  getTableComment,
+  getColumnComments,
+  getEnumComment,
+  getViewComment,
+  getMaterializedViewComment,
+  getFunctionComment,
+  getIndexComments,
+  getTriggerComments,
+  getConstraintComments,
+  getPolicyComments,
+} from "../src/introspect/index.js";
 import type { TableSchema } from "../src/schema/types.js";
 
 describe("comments", () => {
@@ -12,7 +29,10 @@ describe("comments", () => {
     it("parses table and column comments", () => {
       const project = createTempProject();
       try {
-        const filePath = writeSchema(project.schemaDir, "users.yaml", `
+        const filePath = writeSchema(
+          project.schemaDir,
+          "users.yaml",
+          `
 table: users
 comment: "Core user accounts table"
 columns:
@@ -22,7 +42,8 @@ columns:
   - name: email
     type: varchar(255)
     comment: "User's primary email"
-`);
+`,
+        );
         const schema = parseTableFile(filePath);
         expect(schema.comment).toBe("Core user accounts table");
         const email = schema.columns.find((c) => c.name === "email");
@@ -35,7 +56,10 @@ columns:
     it("parses index comment", () => {
       const project = createTempProject();
       try {
-        const filePath = writeSchema(project.schemaDir, "users.yaml", `
+        const filePath = writeSchema(
+          project.schemaDir,
+          "users.yaml",
+          `
 table: users
 columns:
   - name: id
@@ -47,7 +71,8 @@ indexes:
   - columns: [email]
     name: idx_users_email
     comment: "Speed up email lookups"
-`);
+`,
+        );
         const schema = parseTableFile(filePath);
         expect(schema.indexes![0].comment).toBe("Speed up email lookups");
       } finally {
@@ -58,7 +83,10 @@ indexes:
     it("parses trigger comment", () => {
       const project = createTempProject();
       try {
-        const filePath = writeSchema(project.schemaDir, "users.yaml", `
+        const filePath = writeSchema(
+          project.schemaDir,
+          "users.yaml",
+          `
 table: users
 columns:
   - name: id
@@ -70,7 +98,8 @@ triggers:
     events: [INSERT]
     function: audit_log
     comment: "Audit trail trigger"
-`);
+`,
+        );
         const schema = parseTableFile(filePath);
         expect(schema.triggers![0].comment).toBe("Audit trail trigger");
       } finally {
@@ -81,7 +110,10 @@ triggers:
     it("parses policy comment", () => {
       const project = createTempProject();
       try {
-        const filePath = writeSchema(project.schemaDir, "users.yaml", `
+        const filePath = writeSchema(
+          project.schemaDir,
+          "users.yaml",
+          `
 table: users
 columns:
   - name: id
@@ -93,7 +125,8 @@ policies:
     for: SELECT
     using: "true"
     comment: "Allow all reads"
-`);
+`,
+        );
         const schema = parseTableFile(filePath);
         expect(schema.policies![0].comment).toBe("Allow all reads");
       } finally {
@@ -104,7 +137,10 @@ policies:
     it("parses check constraint comment", () => {
       const project = createTempProject();
       try {
-        const filePath = writeSchema(project.schemaDir, "users.yaml", `
+        const filePath = writeSchema(
+          project.schemaDir,
+          "users.yaml",
+          `
 table: users
 columns:
   - name: id
@@ -116,7 +152,8 @@ checks:
   - name: chk_age_positive
     expression: "age > 0"
     comment: "Age must be positive"
-`);
+`,
+        );
         const schema = parseTableFile(filePath);
         expect(schema.checks![0].comment).toBe("Age must be positive");
       } finally {
@@ -127,11 +164,15 @@ checks:
     it("parses enum comment", () => {
       const project = createTempProject();
       try {
-        const filePath = writeSchema(project.schemaDir, "enum_status.yaml", `
+        const filePath = writeSchema(
+          project.schemaDir,
+          "enum_status.yaml",
+          `
 enum: status
 values: [active, inactive]
 comment: "User account status"
-`);
+`,
+        );
         const schema = parseEnumFile(filePath);
         expect(schema.comment).toBe("User account status");
       } finally {
@@ -142,11 +183,15 @@ comment: "User account status"
     it("parses view comment", () => {
       const project = createTempProject();
       try {
-        const filePath = writeSchema(project.schemaDir, "view_active.yaml", `
+        const filePath = writeSchema(
+          project.schemaDir,
+          "view_active.yaml",
+          `
 view: active_users
 query: "SELECT * FROM users WHERE active = true"
 comment: "Only active users"
-`);
+`,
+        );
         const schema = parseViewFile(filePath);
         expect(schema.comment).toBe("Only active users");
       } finally {
@@ -157,11 +202,15 @@ comment: "Only active users"
     it("parses materialized view comment", () => {
       const project = createTempProject();
       try {
-        const filePath = writeSchema(project.schemaDir, "mv_stats.yaml", `
+        const filePath = writeSchema(
+          project.schemaDir,
+          "mv_stats.yaml",
+          `
 materialized_view: user_stats
 query: "SELECT count(*) FROM users"
 comment: "User statistics"
-`);
+`,
+        );
         const schema = parseMaterializedViewFile(filePath);
         expect(schema.comment).toBe("User statistics");
       } finally {
@@ -172,13 +221,17 @@ comment: "User statistics"
     it("parses function comment", () => {
       const project = createTempProject();
       try {
-        const filePath = writeSchema(project.schemaDir, "fn_audit.yaml", `
+        const filePath = writeSchema(
+          project.schemaDir,
+          "fn_audit.yaml",
+          `
 name: audit_log
 language: plpgsql
 returns: trigger
 body: "BEGIN RETURN NEW; END;"
 comment: "Audit logging function"
-`);
+`,
+        );
         const schema = parseFunctionFile(filePath);
         expect(schema.comment).toBe("Audit logging function");
       } finally {
@@ -191,14 +244,16 @@ comment: "Audit logging function"
     it("plans COMMENT ON TABLE for new table with comment", async () => {
       await ctx.client.query(`CREATE TABLE users (id serial PRIMARY KEY, email text NOT NULL)`);
 
-      const desired: TableSchema[] = [{
-        table: "users",
-        comment: "Core user accounts",
-        columns: [
-          { name: "id", type: "serial", primary_key: true },
-          { name: "email", type: "text" },
-        ],
-      }];
+      const desired: TableSchema[] = [
+        {
+          table: "users",
+          comment: "Core user accounts",
+          columns: [
+            { name: "id", type: "serial", primary_key: true },
+            { name: "email", type: "text" },
+          ],
+        },
+      ];
 
       const plan = await buildPlan(ctx.client, desired, "public");
       const commentOp = plan.structureOps.find((o) => o.type === "set_comment" && o.sql.includes("COMMENT ON TABLE"));
@@ -210,13 +265,15 @@ comment: "Audit logging function"
     it("plans COMMENT ON COLUMN for column with comment", async () => {
       await ctx.client.query(`CREATE TABLE users (id serial PRIMARY KEY, email text NOT NULL)`);
 
-      const desired: TableSchema[] = [{
-        table: "users",
-        columns: [
-          { name: "id", type: "serial", primary_key: true },
-          { name: "email", type: "text", comment: "Primary email address" },
-        ],
-      }];
+      const desired: TableSchema[] = [
+        {
+          table: "users",
+          columns: [
+            { name: "id", type: "serial", primary_key: true },
+            { name: "email", type: "text", comment: "Primary email address" },
+          ],
+        },
+      ];
 
       const plan = await buildPlan(ctx.client, desired, "public");
       const commentOp = plan.structureOps.find((o) => o.type === "set_comment" && o.sql.includes("COMMENT ON COLUMN"));
@@ -229,14 +286,16 @@ comment: "Audit logging function"
       await ctx.client.query(`COMMENT ON TABLE users IS 'Core table'`);
       await ctx.client.query(`COMMENT ON COLUMN users.email IS 'Email address'`);
 
-      const desired: TableSchema[] = [{
-        table: "users",
-        comment: "Core table",
-        columns: [
-          { name: "id", type: "serial", primary_key: true },
-          { name: "email", type: "text", comment: "Email address" },
-        ],
-      }];
+      const desired: TableSchema[] = [
+        {
+          table: "users",
+          comment: "Core table",
+          columns: [
+            { name: "id", type: "serial", primary_key: true },
+            { name: "email", type: "text", comment: "Email address" },
+          ],
+        },
+      ];
 
       const plan = await buildPlan(ctx.client, desired, "public");
       const commentOps = plan.structureOps.filter((o) => o.type === "set_comment");
@@ -247,14 +306,16 @@ comment: "Audit logging function"
       await ctx.client.query(`CREATE TABLE users (id serial PRIMARY KEY, email text NOT NULL)`);
       await ctx.client.query(`CREATE INDEX idx_users_email ON users (email)`);
 
-      const desired: TableSchema[] = [{
-        table: "users",
-        columns: [
-          { name: "id", type: "serial", primary_key: true },
-          { name: "email", type: "text" },
-        ],
-        indexes: [{ columns: ["email"], name: "idx_users_email", comment: "Email lookup index" }],
-      }];
+      const desired: TableSchema[] = [
+        {
+          table: "users",
+          columns: [
+            { name: "id", type: "serial", primary_key: true },
+            { name: "email", type: "text" },
+          ],
+          indexes: [{ columns: ["email"], name: "idx_users_email", comment: "Email lookup index" }],
+        },
+      ];
 
       const plan = await buildPlan(ctx.client, desired, "public");
       const commentOp = plan.validateOps.find((o) => o.type === "set_comment" && o.sql.includes("COMMENT ON INDEX"));
@@ -264,21 +325,29 @@ comment: "Audit logging function"
 
     it("plans COMMENT ON TRIGGER for trigger with comment", async () => {
       await ctx.client.query(`CREATE TABLE users (id serial PRIMARY KEY)`);
-      await ctx.client.query(`CREATE FUNCTION noop_trigger() RETURNS trigger LANGUAGE plpgsql AS 'BEGIN RETURN NEW; END;'`);
-      await ctx.client.query(`CREATE TRIGGER trg_test AFTER INSERT ON users FOR EACH ROW EXECUTE FUNCTION noop_trigger()`);
+      await ctx.client.query(
+        `CREATE FUNCTION noop_trigger() RETURNS trigger LANGUAGE plpgsql AS 'BEGIN RETURN NEW; END;'`,
+      );
+      await ctx.client.query(
+        `CREATE TRIGGER trg_test AFTER INSERT ON users FOR EACH ROW EXECUTE FUNCTION noop_trigger()`,
+      );
 
-      const desired: TableSchema[] = [{
-        table: "users",
-        columns: [{ name: "id", type: "serial", primary_key: true }],
-        triggers: [{
-          name: "trg_test",
-          timing: "AFTER",
-          events: ["INSERT"],
-          function: "noop_trigger",
-          for_each: "ROW",
-          comment: "Test trigger comment",
-        }],
-      }];
+      const desired: TableSchema[] = [
+        {
+          table: "users",
+          columns: [{ name: "id", type: "serial", primary_key: true }],
+          triggers: [
+            {
+              name: "trg_test",
+              timing: "AFTER",
+              events: ["INSERT"],
+              function: "noop_trigger",
+              for_each: "ROW",
+              comment: "Test trigger comment",
+            },
+          ],
+        },
+      ];
 
       const plan = await buildPlan(ctx.client, desired, "public");
       const commentOp = plan.structureOps.find((o) => o.type === "set_comment" && o.sql.includes("COMMENT ON TRIGGER"));
@@ -297,9 +366,14 @@ comment: "Audit logging function"
 
     it("plans COMMENT ON VIEW for view with comment", async () => {
       await ctx.client.query(`CREATE TABLE users (id serial PRIMARY KEY)`);
-      const plan = await buildPlan(ctx.client, [{ table: "users", columns: [{ name: "id", type: "serial", primary_key: true }] }], "public", {
-        views: [{ name: "all_users", query: "SELECT * FROM users", comment: "All users view" }],
-      });
+      const plan = await buildPlan(
+        ctx.client,
+        [{ table: "users", columns: [{ name: "id", type: "serial", primary_key: true }] }],
+        "public",
+        {
+          views: [{ name: "all_users", query: "SELECT * FROM users", comment: "All users view" }],
+        },
+      );
       const commentOp = plan.structureOps.find((o) => o.type === "set_comment" && o.sql.includes("COMMENT ON VIEW"));
       expect(commentOp).toBeDefined();
       expect(commentOp!.sql).toContain("All users view");
@@ -307,10 +381,19 @@ comment: "Audit logging function"
 
     it("plans COMMENT ON MATERIALIZED VIEW for MV with comment", async () => {
       await ctx.client.query(`CREATE TABLE users (id serial PRIMARY KEY)`);
-      const plan = await buildPlan(ctx.client, [{ table: "users", columns: [{ name: "id", type: "serial", primary_key: true }] }], "public", {
-        materializedViews: [{ name: "user_counts", query: "SELECT count(*) FROM users", comment: "User count cache" }],
-      });
-      const commentOp = plan.structureOps.find((o) => o.type === "set_comment" && o.sql.includes("COMMENT ON MATERIALIZED VIEW"));
+      const plan = await buildPlan(
+        ctx.client,
+        [{ table: "users", columns: [{ name: "id", type: "serial", primary_key: true }] }],
+        "public",
+        {
+          materializedViews: [
+            { name: "user_counts", query: "SELECT count(*) FROM users", comment: "User count cache" },
+          ],
+        },
+      );
+      const commentOp = plan.structureOps.find(
+        (o) => o.type === "set_comment" && o.sql.includes("COMMENT ON MATERIALIZED VIEW"),
+      );
       expect(commentOp).toBeDefined();
       expect(commentOp!.sql).toContain("User count cache");
     });
@@ -385,8 +468,12 @@ comment: "Audit logging function"
 
     it("reads trigger comments", async () => {
       await ctx.client.query(`CREATE TABLE users (id serial PRIMARY KEY)`);
-      await ctx.client.query(`CREATE FUNCTION noop_trigger() RETURNS trigger LANGUAGE plpgsql AS 'BEGIN RETURN NEW; END;'`);
-      await ctx.client.query(`CREATE TRIGGER trg_test AFTER INSERT ON users FOR EACH ROW EXECUTE FUNCTION noop_trigger()`);
+      await ctx.client.query(
+        `CREATE FUNCTION noop_trigger() RETURNS trigger LANGUAGE plpgsql AS 'BEGIN RETURN NEW; END;'`,
+      );
+      await ctx.client.query(
+        `CREATE TRIGGER trg_test AFTER INSERT ON users FOR EACH ROW EXECUTE FUNCTION noop_trigger()`,
+      );
       await ctx.client.query(`COMMENT ON TRIGGER trg_test ON users IS 'Test trigger'`);
 
       const comments = await getTriggerComments(ctx.client, "users", "public");

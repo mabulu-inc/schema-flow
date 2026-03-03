@@ -2,7 +2,7 @@
 // Tests for down migrations / rollback
 
 import { describe, it, expect } from "vitest";
-import { computeRollback, type RollbackResult } from "../src/rollback/index.js";
+import { computeRollback } from "../src/rollback/index.js";
 import type { Operation } from "../src/planner/index.js";
 import type { MigrationSnapshot } from "../src/rollback/snapshot.js";
 
@@ -316,7 +316,7 @@ describe("rollback", () => {
   it("returns null for unknown operation types", () => {
     const ops: Operation[] = [
       makeOp({
-        type: "backfill_column" as any,
+        type: "backfill_column",
         table: "users",
         sql: "-- backfill",
         description: "Backfill",

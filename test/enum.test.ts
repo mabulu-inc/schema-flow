@@ -11,10 +11,14 @@ describe("enums", () => {
     it("parses a valid enum file", () => {
       const project = createTempProject();
       try {
-        const filePath = writeSchema(project.schemaDir, "enum_status.yaml", `
+        const filePath = writeSchema(
+          project.schemaDir,
+          "enum_status.yaml",
+          `
 enum: status
 values: [active, inactive, suspended]
-`);
+`,
+        );
         const result = parseEnumFile(filePath);
         expect(result.name).toBe("status");
         expect(result.values).toEqual(["active", "inactive", "suspended"]);
@@ -27,7 +31,7 @@ values: [active, inactive, suspended]
       const project = createTempProject();
       try {
         const filePath = writeSchema(project.schemaDir, "bad.yaml", `values: [a, b]`);
-        expect(() => parseEnumFile(filePath)).toThrow("expected \"enum\" key");
+        expect(() => parseEnumFile(filePath)).toThrow('expected "enum" key');
       } finally {
         project.cleanup();
       }

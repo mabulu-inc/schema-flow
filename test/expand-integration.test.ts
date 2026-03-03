@@ -163,9 +163,7 @@ describe("expand integration", () => {
         expect(result.totalRows).toBe(5);
         expect(result.batches).toBeGreaterThanOrEqual(3);
 
-        const check = await ctx.client.query(
-          `SELECT count(*) as cnt FROM "public"."bf_test" WHERE full_name IS NULL`,
-        );
+        const check = await ctx.client.query(`SELECT count(*) as cnt FROM "public"."bf_test" WHERE full_name IS NULL`);
         expect(parseInt(check.rows[0].cnt, 10)).toBe(0);
       } finally {
         await pool.end();

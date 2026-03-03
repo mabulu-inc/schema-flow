@@ -40,16 +40,20 @@ describe("runDown integration", () => {
     const tracker = new FileTracker("_schema_flow_history");
     await withClient(connectionString, async (client) => {
       await tracker.ensureRunsTable(client);
-      const runId = await tracker.startRun(client, [
-        {
-          type: "create_table",
-          table: "test_tbl",
-          sql: 'CREATE TABLE "public"."test_tbl" ("id" serial PRIMARY KEY);',
-          description: "Create table test_tbl",
-          phase: "structure",
-          destructive: false,
-        },
-      ], { tables: {}, capturedAt: "" });
+      const runId = await tracker.startRun(
+        client,
+        [
+          {
+            type: "create_table",
+            table: "test_tbl",
+            sql: 'CREATE TABLE "public"."test_tbl" ("id" serial PRIMARY KEY);',
+            description: "Create table test_tbl",
+            phase: "structure",
+            destructive: false,
+          },
+        ],
+        { tables: {}, capturedAt: "" },
+      );
       await tracker.completeRun(client, runId, 1);
     });
 
@@ -69,16 +73,20 @@ describe("runDown integration", () => {
     const tracker = new FileTracker("_schema_flow_history");
     await withClient(connectionString, async (client) => {
       await tracker.ensureRunsTable(client);
-      const runId = await tracker.startRun(client, [
-        {
-          type: "create_table",
-          table: "test_tbl2",
-          sql: 'CREATE TABLE "public"."test_tbl2" ("id" serial PRIMARY KEY);',
-          description: "Create table test_tbl2",
-          phase: "structure",
-          destructive: false,
-        },
-      ], { tables: {}, capturedAt: "" });
+      const runId = await tracker.startRun(
+        client,
+        [
+          {
+            type: "create_table",
+            table: "test_tbl2",
+            sql: 'CREATE TABLE "public"."test_tbl2" ("id" serial PRIMARY KEY);',
+            description: "Create table test_tbl2",
+            phase: "structure",
+            destructive: false,
+          },
+        ],
+        { tables: {}, capturedAt: "" },
+      );
       await tracker.completeRun(client, runId, 1);
     });
 

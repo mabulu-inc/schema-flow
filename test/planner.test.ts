@@ -609,7 +609,9 @@ describe("planner", () => {
     // Validate phase should have VALIDATE CONSTRAINT
     const validateOps = plan.validateOps;
     expect(validateOps.length).toBeGreaterThan(0);
-    const validateFk = validateOps.find((o) => o.type === "validate_constraint" && o.sql.includes("fk_books_author_id_authors"));
+    const validateFk = validateOps.find(
+      (o) => o.type === "validate_constraint" && o.sql.includes("fk_books_author_id_authors"),
+    );
     expect(validateFk).toBeDefined();
     expect(validateFk!.sql).toContain("VALIDATE CONSTRAINT");
   });
@@ -738,9 +740,7 @@ describe("planner", () => {
     expect(idxOp!.sql).toContain("idx_users_email_unique");
 
     // Should have ADD CONSTRAINT USING INDEX in validate phase
-    const constraintOp = plan.validateOps.find(
-      (o) => o.sql.includes("UNIQUE USING INDEX"),
-    );
+    const constraintOp = plan.validateOps.find((o) => o.sql.includes("UNIQUE USING INDEX"));
     expect(constraintOp).toBeDefined();
     expect(constraintOp!.sql).toContain("uq_users_email");
   });

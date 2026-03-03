@@ -90,7 +90,11 @@ export class FileTracker {
   }
 
   /** Record a file as applied */
-  async recordFile(client: pg.PoolClient, filePath: string, phase: "pre" | "schema" | "post" | "repeatable"): Promise<void> {
+  async recordFile(
+    client: pg.PoolClient,
+    filePath: string,
+    phase: "pre" | "schema" | "post" | "repeatable",
+  ): Promise<void> {
     const hash = this.hashFile(filePath);
     await client.query(
       `INSERT INTO ${this.table} (file_path, file_hash, phase)
@@ -124,11 +128,7 @@ export class FileTracker {
   }
 
   /** Start a new migration run, returning the run_id */
-  async startRun(
-    client: pg.PoolClient,
-    operations: unknown[],
-    snapshot: unknown,
-  ): Promise<string> {
+  async startRun(client: pg.PoolClient, operations: unknown[], snapshot: unknown): Promise<string> {
     const res = await client.query(
       `INSERT INTO ${this.runsTable} (status, operations, snapshot)
        VALUES ('running', $1::jsonb, $2::jsonb)

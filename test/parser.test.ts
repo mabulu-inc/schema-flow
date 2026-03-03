@@ -380,10 +380,7 @@ describe("parsePolicyDef", () => {
   });
 
   it("parses a valid policy with defaults", () => {
-    const policy = parsePolicyDef(
-      { name: "my_policy", for: "SELECT", using: "true" },
-      "test.yaml",
-    );
+    const policy = parsePolicyDef({ name: "my_policy", for: "SELECT", using: "true" }, "test.yaml");
     expect(policy.name).toBe("my_policy");
     expect(policy.for).toBe("SELECT");
     expect(policy.using).toBe("true");
@@ -393,26 +390,17 @@ describe("parsePolicyDef", () => {
   });
 
   it("coerces to as string to array", () => {
-    const policy = parsePolicyDef(
-      { name: "p", for: "ALL", to: "app_user" },
-      "test.yaml",
-    );
+    const policy = parsePolicyDef({ name: "p", for: "ALL", to: "app_user" }, "test.yaml");
     expect(policy.to).toEqual(["app_user"]);
   });
 
   it("accepts to as array", () => {
-    const policy = parsePolicyDef(
-      { name: "p", for: "ALL", to: ["role1", "role2"] },
-      "test.yaml",
-    );
+    const policy = parsePolicyDef({ name: "p", for: "ALL", to: ["role1", "role2"] }, "test.yaml");
     expect(policy.to).toEqual(["role1", "role2"]);
   });
 
   it("parses permissive: false as RESTRICTIVE", () => {
-    const policy = parsePolicyDef(
-      { name: "p", for: "ALL", permissive: false, using: "true" },
-      "test.yaml",
-    );
+    const policy = parsePolicyDef({ name: "p", for: "ALL", permissive: false, using: "true" }, "test.yaml");
     expect(policy.permissive).toBe(false);
   });
 });

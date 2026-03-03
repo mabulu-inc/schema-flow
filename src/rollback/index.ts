@@ -1,7 +1,7 @@
 // src/rollback/index.ts
 // Compute reverse SQL operations from forward operations
 
-import type { Operation, OperationType } from "../planner/index.js";
+import type { Operation } from "../planner/index.js";
 import type { MigrationSnapshot } from "./snapshot.js";
 
 export interface ReverseOperation {
@@ -45,11 +45,7 @@ export function computeRollback(
   };
 }
 
-function reverseOperation(
-  op: Operation,
-  snapshot: MigrationSnapshot,
-  pgSchema: string,
-): ReverseOperation | null {
+function reverseOperation(op: Operation, snapshot: MigrationSnapshot, pgSchema: string): ReverseOperation | null {
   const qualifiedTable = op.table ? `"${pgSchema}"."${op.table}"` : "";
 
   switch (op.type) {

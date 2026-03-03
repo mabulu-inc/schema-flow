@@ -3,8 +3,21 @@
 
 import path from "node:path";
 import type { SchemaFlowConfig } from "../core/config.js";
-import type { TableSchema, EnumSchema, ViewSchema, MaterializedViewSchema, UniqueConstraintDef } from "../schema/types.js";
-import { parseTableFile, parseFunctionFile, parseEnumFile, parseExtensionsFile, parseViewFile, parseMaterializedViewFile } from "../schema/parser.js";
+import type {
+  TableSchema,
+  EnumSchema,
+  ViewSchema,
+  MaterializedViewSchema,
+  UniqueConstraintDef,
+} from "../schema/types.js";
+import {
+  parseTableFile,
+  parseFunctionFile,
+  parseEnumFile,
+  parseExtensionsFile,
+  parseViewFile,
+  parseMaterializedViewFile,
+} from "../schema/parser.js";
 import { loadMixins, expandMixins } from "../schema/mixins.js";
 import { discoverSchemaFiles } from "../core/files.js";
 import { normalizeType } from "../planner/index.js";
@@ -35,7 +48,20 @@ import {
 import type { FunctionSchema } from "../schema/types.js";
 
 export interface DriftItem {
-  category: "table" | "column" | "index" | "constraint" | "trigger" | "policy" | "rls" | "function" | "enum" | "extension" | "view" | "materialized_view" | "comment";
+  category:
+    | "table"
+    | "column"
+    | "index"
+    | "constraint"
+    | "trigger"
+    | "policy"
+    | "rls"
+    | "function"
+    | "enum"
+    | "extension"
+    | "view"
+    | "materialized_view"
+    | "comment";
   direction: "extra_in_db" | "missing_from_db" | "mismatch";
   table?: string;
   name: string;
@@ -323,8 +349,12 @@ export async function detectDrift(config: SchemaFlowConfig): Promise<DriftReport
             name: desired.name,
             description: `Enum "${desired.name}" values differ`,
             details: [
-              ...(missingValues.length > 0 ? [{ field: "missing_values", expected: missingValues.join(", "), actual: "(not in DB)" }] : []),
-              ...(extraValues.length > 0 ? [{ field: "extra_values", expected: "(not in YAML)", actual: extraValues.join(", ") }] : []),
+              ...(missingValues.length > 0
+                ? [{ field: "missing_values", expected: missingValues.join(", "), actual: "(not in DB)" }]
+                : []),
+              ...(extraValues.length > 0
+                ? [{ field: "extra_values", expected: "(not in YAML)", actual: extraValues.join(", ") }]
+                : []),
             ],
           });
         }
@@ -529,8 +559,7 @@ function diffTable(desired: TableSchema, current: TableSchema, items: DriftItem[
     if (normalizeType(existing.type) !== normalizeType(col.type)) {
       // Skip serial vs integer mismatch (serial is just integer + sequence)
       const isSerialMatch =
-        (isSerial(col.type) && isIntegerEquiv(existing.type)) ||
-        (isSerial(existing.type) && isIntegerEquiv(col.type));
+        (isSerial(col.type) && isIntegerEquiv(existing.type)) || (isSerial(existing.type) && isIntegerEquiv(col.type));
       if (!isSerialMatch) {
         details.push({
           field: "type",
@@ -554,7 +583,10 @@ function diffTable(desired: TableSchema, current: TableSchema, items: DriftItem[
     // Default comparison (rough — defaults can vary in representation)
     if (col.default !== undefined && existing.default !== undefined) {
       const dNorm = String(col.default).replace(/'/g, "").trim();
-      const eNorm = String(existing.default).replace(/'/g, "").replace(/::[^)]+$/, "").trim();
+      const eNorm = String(existing.default)
+        .replace(/'/g, "")
+        .replace(/::[^)]+$/, "")
+        .trim();
       if (dNorm !== eNorm && col.default !== existing.default) {
         details.push({
           field: "default",
@@ -574,12 +606,24 @@ function diffTable(desired: TableSchema, current: TableSchema, items: DriftItem[
     }
 
     // Unique constraint name
-    if (col.unique && existing.unique && col.unique_name && existing.unique_name && col.unique_name !== existing.unique_name) {
+    if (
+      col.unique &&
+      existing.unique &&
+      col.unique_name &&
+      existing.unique_name &&
+      col.unique_name !== existing.unique_name
+    ) {
       details.push({ field: "unique_name", expected: col.unique_name, actual: existing.unique_name });
     }
 
     // FK constraint name
-    if (col.references && existing.references && col.references.name && existing.references.name && col.references.name !== existing.references.name) {
+    if (
+      col.references &&
+      existing.references &&
+      col.references.name &&
+      existing.references.name &&
+      col.references.name !== existing.references.name
+    ) {
       details.push({ field: "fk_name", expected: col.references.name, actual: existing.references.name });
     }
 
@@ -593,7 +637,11 @@ function diffTable(desired: TableSchema, current: TableSchema, items: DriftItem[
       const desiredDeferred = col.references.initially_deferred === true;
       const existingDeferred = existing.references.initially_deferred === true;
       if (desiredDeferred !== existingDeferred) {
-        details.push({ field: "initially_deferred", expected: String(desiredDeferred), actual: String(existingDeferred) });
+        details.push({
+          field: "initially_deferred",
+          expected: String(desiredDeferred),
+          actual: String(existingDeferred),
+        });
       }
     }
 
@@ -695,9 +743,7 @@ function diffTableIndexes(desired: TableSchema, dbIndexes: DbIndex[], items: Dri
   const desiredIndexes = desired.indexes || [];
 
   // Filter out constraint-backing indexes using semantic metadata
-  const existing = dbIndexes
-    .filter((i) => !i.constraint_type)
-    .map((i) => parseIndexDefFull(i.indexdef));
+  const existing = dbIndexes.filter((i) => !i.constraint_type).map((i) => parseIndexDefFull(i.indexdef));
 
   const existingByName = new Map(existing.map((i) => [i.name, i]));
   const desiredByName = new Map<string, unknown>();

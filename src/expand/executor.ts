@@ -2,7 +2,7 @@
 // Contract command and expand status display
 
 import type { SchemaFlowConfig } from "../core/config.js";
-import { withClient, getPool } from "../core/db.js";
+import { withClient } from "../core/db.js";
 import { logger } from "../core/logger.js";
 import { ExpandTracker } from "./tracker.js";
 import { planContractColumn } from "./planner.js";
@@ -26,9 +26,7 @@ export async function runContract(
     await tracker.ensureTable(client);
 
     const active = await tracker.getActive(client);
-    const expandedRecords = active.filter(
-      (r) => r.status === "expanded" || r.status === "backfilling",
-    );
+    const expandedRecords = active.filter((r) => r.status === "expanded" || r.status === "backfilling");
 
     if (expandedRecords.length === 0) {
       logger.info("No expanded columns ready for contraction.");
@@ -47,7 +45,7 @@ export async function runContract(
       if (nullCount > 0) {
         logger.warn(
           `Cannot contract ${record.table_name}.${record.old_column} → ${record.new_column}: ` +
-          `${nullCount} NULL values remain in ${record.new_column}. Run backfill first.`,
+            `${nullCount} NULL values remain in ${record.new_column}. Run backfill first.`,
         );
         continue;
       }
@@ -55,7 +53,7 @@ export async function runContract(
       if (!options.allowDestructive) {
         logger.warn(
           `Contraction of ${record.table_name}.${record.old_column} requires --allow-destructive ` +
-          `(will drop the old column).`,
+            `(will drop the old column).`,
         );
         continue;
       }
@@ -86,7 +84,11 @@ export async function runContract(
         const msg = err instanceof Error ? err.message : String(err);
         errors.push(msg);
         logger.error(`Contract failed for ${record.table_name}: ${msg}`);
-        try { await client.query("ROLLBACK"); } catch { /* ignore */ }
+        try {
+          await client.query("ROLLBACK");
+        } catch {
+          /* ignore */
+        }
       }
     }
 

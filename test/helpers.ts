@@ -250,11 +250,7 @@ export function writeMixin(mixinsDir: string, filename: string, content: string)
 /**
  * Check if an RLS policy exists on a table.
  */
-export async function policyExists(
-  connectionString: string,
-  policyName: string,
-  tableName: string,
-): Promise<boolean> {
+export async function policyExists(connectionString: string, policyName: string, tableName: string): Promise<boolean> {
   const res = await execSql(
     connectionString,
     `SELECT 1 FROM pg_policies
@@ -314,11 +310,7 @@ export async function getEnumValues(connectionString: string, enumName: string):
  * Check if a PostgreSQL extension is installed.
  */
 export async function extensionExists(connectionString: string, extName: string): Promise<boolean> {
-  const res = await execSql(
-    connectionString,
-    `SELECT 1 FROM pg_extension WHERE extname = $1`,
-    [extName],
-  );
+  const res = await execSql(connectionString, `SELECT 1 FROM pg_extension WHERE extname = $1`, [extName]);
   return res.rowCount !== null && res.rowCount > 0;
 }
 
@@ -410,15 +402,10 @@ export async function getComment(
 /**
  * Check if a constraint is deferrable.
  */
-export async function isConstraintDeferrable(
-  connectionString: string,
-  constraintName: string,
-): Promise<boolean> {
-  const res = await execSql(
-    connectionString,
-    `SELECT condeferrable FROM pg_constraint WHERE conname = $1`,
-    [constraintName],
-  );
+export async function isConstraintDeferrable(connectionString: string, constraintName: string): Promise<boolean> {
+  const res = await execSql(connectionString, `SELECT condeferrable FROM pg_constraint WHERE conname = $1`, [
+    constraintName,
+  ]);
   return res.rows.length > 0 && res.rows[0].condeferrable === true;
 }
 
@@ -429,41 +416,27 @@ export async function isConstraintInitiallyDeferred(
   connectionString: string,
   constraintName: string,
 ): Promise<boolean> {
-  const res = await execSql(
-    connectionString,
-    `SELECT condeferred FROM pg_constraint WHERE conname = $1`,
-    [constraintName],
-  );
+  const res = await execSql(connectionString, `SELECT condeferred FROM pg_constraint WHERE conname = $1`, [
+    constraintName,
+  ]);
   return res.rows.length > 0 && res.rows[0].condeferred === true;
 }
 
 /**
  * Check if a constraint is validated (convalidated=true in pg_constraint).
  */
-export async function constraintValidated(
-  connectionString: string,
-  constraintName: string,
-): Promise<boolean> {
-  const res = await execSql(
-    connectionString,
-    `SELECT convalidated FROM pg_constraint WHERE conname = $1`,
-    [constraintName],
-  );
+export async function constraintValidated(connectionString: string, constraintName: string): Promise<boolean> {
+  const res = await execSql(connectionString, `SELECT convalidated FROM pg_constraint WHERE conname = $1`, [
+    constraintName,
+  ]);
   return res.rows.length > 0 && res.rows[0].convalidated === true;
 }
 
 /**
  * Check if a constraint exists.
  */
-export async function constraintExists(
-  connectionString: string,
-  constraintName: string,
-): Promise<boolean> {
-  const res = await execSql(
-    connectionString,
-    `SELECT 1 FROM pg_constraint WHERE conname = $1`,
-    [constraintName],
-  );
+export async function constraintExists(connectionString: string, constraintName: string): Promise<boolean> {
+  const res = await execSql(connectionString, `SELECT 1 FROM pg_constraint WHERE conname = $1`, [constraintName]);
   return res.rowCount !== null && res.rowCount > 0;
 }
 

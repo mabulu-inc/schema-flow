@@ -153,7 +153,7 @@ describe("generateFromDb", () => {
       baseDir: ctx.project.baseDir,
     });
 
-    const files = await generateFromDb(config);
+    await generateFromDb(config);
     const triggeredFile = path.join(ctx.project.schemaDir, "triggered.yaml");
     expect(existsSync(triggeredFile)).toBe(true);
 

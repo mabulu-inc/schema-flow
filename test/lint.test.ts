@@ -275,9 +275,7 @@ describe("lint", () => {
 
   describe("formatLintFindingsJson", () => {
     it("returns valid JSON with findings and count", () => {
-      const findings = [
-        { severity: "warning" as const, rule: "data/drop-column", table: "users", message: "test" },
-      ];
+      const findings = [{ severity: "warning" as const, rule: "data/drop-column", table: "users", message: "test" }];
       const json = formatLintFindingsJson(findings);
       const parsed = JSON.parse(json);
       expect(parsed.count).toBe(1);

@@ -207,10 +207,7 @@ async function showStatus(config: SchemaFlowConfig): Promise<void> {
     console.log(`    Unchanged: ${preStatus.unchangedFiles.length}`);
 
     // Mixin files
-    const mixinFiles = await glob([
-      path.join(config.mixinsDir, "*.yaml"),
-      path.join(config.mixinsDir, "*.yml"),
-    ]);
+    const mixinFiles = await glob([path.join(config.mixinsDir, "*.yaml"), path.join(config.mixinsDir, "*.yml")]);
 
     console.log("");
     console.log("  Post-migration scripts:");
@@ -491,9 +488,7 @@ async function main(): Promise<void> {
         const pathMod = await import("node:path");
         const { discoverSchemaFiles: discoverFiles } = await import("../core/files.js");
         const schemaFilesForLint = await discoverFiles(config.schemaDir);
-        const tableFilesForLint = schemaFilesForLint.filter(
-          (f) => !pathMod.default.basename(f).startsWith("fn_"),
-        );
+        const tableFilesForLint = schemaFilesForLint.filter((f) => !pathMod.default.basename(f).startsWith("fn_"));
 
         // Parse and expand
         const { parseTableFile: ptf } = await import("../schema/parser.js");

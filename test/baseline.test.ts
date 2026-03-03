@@ -8,7 +8,10 @@ describe("baseline", () => {
   const ctx = useTestProject({ closeAppPool: closePool });
 
   it("records all schema files without executing SQL", async () => {
-    writeSchema(ctx.project.schemaDir, "users.yaml", `
+    writeSchema(
+      ctx.project.schemaDir,
+      "users.yaml",
+      `
 table: users
 columns:
   - name: id
@@ -16,7 +19,8 @@ columns:
     primary_key: true
   - name: email
     type: varchar(255)
-`);
+`,
+    );
 
     const config = resolveConfig({
       connectionString: ctx.connectionString,

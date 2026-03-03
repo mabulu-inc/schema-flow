@@ -11,11 +11,7 @@ export const setNotNullDirect: LintRule = {
   check(ctx: LintContext): LintFinding[] {
     const findings: LintFinding[] = [];
     for (const op of ctx.plan.operations) {
-      if (
-        op.type === "alter_column" &&
-        op.sql.includes("SET NOT NULL") &&
-        !op.group?.startsWith("safe_not_null_")
-      ) {
+      if (op.type === "alter_column" && op.sql.includes("SET NOT NULL") && !op.group?.startsWith("safe_not_null_")) {
         findings.push({
           severity: "warning",
           rule: this.id,

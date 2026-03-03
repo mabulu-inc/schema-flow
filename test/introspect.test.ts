@@ -218,9 +218,7 @@ describe("introspect", () => {
   it("gets table policies", async () => {
     await ctx.client.query(`CREATE TABLE policy_test (id serial PRIMARY KEY, user_id integer NOT NULL)`);
     await ctx.client.query(`ALTER TABLE policy_test ENABLE ROW LEVEL SECURITY`);
-    await ctx.client.query(
-      `CREATE POLICY users_see_own ON policy_test FOR SELECT USING (user_id = 1)`,
-    );
+    await ctx.client.query(`CREATE POLICY users_see_own ON policy_test FOR SELECT USING (user_id = 1)`);
 
     const policies = await getTablePolicies(ctx.client, "policy_test", "public");
     expect(policies).toHaveLength(1);
@@ -232,9 +230,7 @@ describe("introspect", () => {
   it("gets restrictive policies", async () => {
     await ctx.client.query(`CREATE TABLE restrict_test (id serial PRIMARY KEY)`);
     await ctx.client.query(`ALTER TABLE restrict_test ENABLE ROW LEVEL SECURITY`);
-    await ctx.client.query(
-      `CREATE POLICY restrictive_pol ON restrict_test AS RESTRICTIVE FOR ALL USING (true)`,
-    );
+    await ctx.client.query(`CREATE POLICY restrictive_pol ON restrict_test AS RESTRICTIVE FOR ALL USING (true)`);
 
     const policies = await getTablePolicies(ctx.client, "restrict_test", "public");
     expect(policies).toHaveLength(1);
@@ -244,9 +240,7 @@ describe("introspect", () => {
   it("introspectTable includes RLS and policies", async () => {
     await ctx.client.query(`CREATE TABLE rls_full_test (id serial PRIMARY KEY, user_id integer NOT NULL)`);
     await ctx.client.query(`ALTER TABLE rls_full_test ENABLE ROW LEVEL SECURITY`);
-    await ctx.client.query(
-      `CREATE POLICY test_policy ON rls_full_test FOR SELECT USING (user_id = 1)`,
-    );
+    await ctx.client.query(`CREATE POLICY test_policy ON rls_full_test FOR SELECT USING (user_id = 1)`);
 
     const schema = await introspectTable(ctx.client, "rls_full_test", "public");
     expect(schema.rls).toBe(true);

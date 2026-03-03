@@ -2,7 +2,18 @@
 // Introspect the current PostgreSQL database state
 
 import pg from "pg";
-import type { TableSchema, ColumnDef, TriggerDef, PolicyDef, EnumSchema, ViewSchema, MaterializedViewSchema, IndexDef, CheckDef, UniqueConstraintDef } from "../schema/types.js";
+import type {
+  TableSchema,
+  ColumnDef,
+  TriggerDef,
+  PolicyDef,
+  EnumSchema,
+  ViewSchema,
+  MaterializedViewSchema,
+  IndexDef,
+  CheckDef,
+  UniqueConstraintDef,
+} from "../schema/types.js";
 
 export interface DbColumn {
   column_name: string;
@@ -154,7 +165,10 @@ export async function getTablePolicies(
       roles = row.roles;
     } else if (typeof row.roles === "string") {
       // Parse PostgreSQL array literal like "{role1,role2}"
-      roles = row.roles.replace(/^\{|\}$/g, "").split(",").filter(Boolean);
+      roles = row.roles
+        .replace(/^\{|\}$/g, "")
+        .split(",")
+        .filter(Boolean);
     } else {
       roles = [];
     }
@@ -538,9 +552,7 @@ export async function getExistingEnums(client: pg.PoolClient, pgSchema: string):
 
 /** Get all installed extensions */
 export async function getExistingExtensions(client: pg.PoolClient): Promise<string[]> {
-  const res = await client.query(
-    `SELECT extname FROM pg_extension WHERE extname <> 'plpgsql' ORDER BY extname`,
-  );
+  const res = await client.query(`SELECT extname FROM pg_extension WHERE extname <> 'plpgsql' ORDER BY extname`);
   return res.rows.map((r) => r.extname);
 }
 
@@ -579,7 +591,10 @@ export interface DbMatView {
 }
 
 /** Get all user-defined materialized views in the schema (excludes extension-owned) */
-export async function getExistingMaterializedViews(client: pg.PoolClient, pgSchema: string): Promise<MaterializedViewSchema[]> {
+export async function getExistingMaterializedViews(
+  client: pg.PoolClient,
+  pgSchema: string,
+): Promise<MaterializedViewSchema[]> {
   const res = await client.query<DbMatView>(
     `SELECT mv.matviewname, mv.definition FROM pg_matviews mv
      WHERE mv.schemaname = $1
@@ -688,7 +703,11 @@ export function parseIndexDefFull(indexdef: string): ParsedIndex {
 // ─── Comment Introspection ───────────────────────────────────────────────────
 
 /** Get the comment on a table */
-export async function getTableComment(client: pg.PoolClient, tableName: string, pgSchema: string): Promise<string | null> {
+export async function getTableComment(
+  client: pg.PoolClient,
+  tableName: string,
+  pgSchema: string,
+): Promise<string | null> {
   const res = await client.query(
     `SELECT obj_description(c.oid) AS comment
      FROM pg_class c
@@ -721,7 +740,11 @@ export async function getColumnComments(
 }
 
 /** Get the comment on an enum type */
-export async function getEnumComment(client: pg.PoolClient, enumName: string, pgSchema: string): Promise<string | null> {
+export async function getEnumComment(
+  client: pg.PoolClient,
+  enumName: string,
+  pgSchema: string,
+): Promise<string | null> {
   const res = await client.query(
     `SELECT obj_description(t.oid, 'pg_type') AS comment
      FROM pg_type t
@@ -733,7 +756,11 @@ export async function getEnumComment(client: pg.PoolClient, enumName: string, pg
 }
 
 /** Get the comment on a view */
-export async function getViewComment(client: pg.PoolClient, viewName: string, pgSchema: string): Promise<string | null> {
+export async function getViewComment(
+  client: pg.PoolClient,
+  viewName: string,
+  pgSchema: string,
+): Promise<string | null> {
   const res = await client.query(
     `SELECT obj_description(c.oid, 'pg_class') AS comment
      FROM pg_class c
@@ -745,7 +772,11 @@ export async function getViewComment(client: pg.PoolClient, viewName: string, pg
 }
 
 /** Get the comment on a materialized view */
-export async function getMaterializedViewComment(client: pg.PoolClient, mvName: string, pgSchema: string): Promise<string | null> {
+export async function getMaterializedViewComment(
+  client: pg.PoolClient,
+  mvName: string,
+  pgSchema: string,
+): Promise<string | null> {
   const res = await client.query(
     `SELECT obj_description(c.oid, 'pg_class') AS comment
      FROM pg_class c
@@ -757,7 +788,11 @@ export async function getMaterializedViewComment(client: pg.PoolClient, mvName: 
 }
 
 /** Get the comment on a function */
-export async function getFunctionComment(client: pg.PoolClient, funcName: string, pgSchema: string): Promise<string | null> {
+export async function getFunctionComment(
+  client: pg.PoolClient,
+  funcName: string,
+  pgSchema: string,
+): Promise<string | null> {
   const res = await client.query(
     `SELECT obj_description(p.oid, 'pg_proc') AS comment
      FROM pg_proc p

@@ -30,9 +30,7 @@ export function planExpandColumn(
   });
 
   // Step 2: Create dual-write trigger function
-  const reverseClause = expand.reverse
-    ? `NEW."${expand.from}" = ${expand.reverse};`
-    : "";
+  const reverseClause = expand.reverse ? `NEW."${expand.from}" = ${expand.reverse};` : "";
   const fnBody = `
 BEGIN
   IF TG_OP = 'INSERT' OR TG_OP = 'UPDATE' THEN

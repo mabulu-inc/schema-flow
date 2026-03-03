@@ -63,7 +63,16 @@ export class ExpandTracker {
        ON CONFLICT (table_name, old_column, new_column) DO UPDATE
          SET status = 'expanding', transform = EXCLUDED.transform, reverse_expr = EXCLUDED.reverse_expr
        RETURNING id`,
-      [opts.tableName, opts.oldColumn, opts.newColumn, opts.transform, opts.reverseExpr || null, opts.triggerName, opts.functionName, opts.batchSize],
+      [
+        opts.tableName,
+        opts.oldColumn,
+        opts.newColumn,
+        opts.transform,
+        opts.reverseExpr || null,
+        opts.triggerName,
+        opts.functionName,
+        opts.batchSize,
+      ],
     );
     return res.rows[0].id;
   }
@@ -99,9 +108,7 @@ export class ExpandTracker {
 
   /** Get all records (for status display) */
   async getAll(client: pg.PoolClient): Promise<ExpandRecord[]> {
-    const res = await client.query<ExpandRecord>(
-      `SELECT * FROM ${EXPAND_TABLE} ORDER BY started_at DESC`,
-    );
+    const res = await client.query<ExpandRecord>(`SELECT * FROM ${EXPAND_TABLE} ORDER BY started_at DESC`);
     return res.rows;
   }
 }

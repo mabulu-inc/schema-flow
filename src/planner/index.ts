@@ -3,8 +3,40 @@
 // Key design: CREATE TABLEs first (without FKs), then ALTER TABLEs for FKs last
 // Safety: destructive operations (drops, narrowing changes) are blocked by default
 
-import type { TableSchema, ColumnDef, IndexDef, CheckDef, TriggerDef, PolicyDef, EnumSchema, ExtensionsSchema, ViewSchema, MaterializedViewSchema, UniqueConstraintDef } from "../schema/types.js";
-import { introspectTable, getExistingTables, getTableConstraints, getExistingEnums, getExistingExtensions, getExistingViews, getExistingMaterializedViews, getTableIndexes, parseIndexDefFull, getTableComment, getColumnComments, getEnumComment, getViewComment, getMaterializedViewComment, getIndexComments, getTriggerComments, getConstraintComments, getPolicyComments, type ParsedIndex } from "../introspect/index.js";
+import type {
+  TableSchema,
+  ColumnDef,
+  IndexDef,
+  CheckDef,
+  TriggerDef,
+  PolicyDef,
+  EnumSchema,
+  ExtensionsSchema,
+  ViewSchema,
+  MaterializedViewSchema,
+  UniqueConstraintDef,
+} from "../schema/types.js";
+import {
+  introspectTable,
+  getExistingTables,
+  getTableConstraints,
+  getExistingEnums,
+  getExistingExtensions,
+  getExistingViews,
+  getExistingMaterializedViews,
+  getTableIndexes,
+  parseIndexDefFull,
+  getTableComment,
+  getColumnComments,
+  getEnumComment,
+  getViewComment,
+  getMaterializedViewComment,
+  getIndexComments,
+  getTriggerComments,
+  getConstraintComments,
+  getPolicyComments,
+  type ParsedIndex,
+} from "../introspect/index.js";
 import { logger } from "../core/logger.js";
 import pg from "pg";
 
@@ -570,7 +602,17 @@ async function planAlterTable(client: pg.PoolClient, desired: TableSchema, pgSch
   const currentTriggerComments = await getTriggerComments(client, desired.table, pgSchema);
   const currentConstraintComments = await getConstraintComments(client, desired.table, pgSchema);
   const currentPolicyComments = await getPolicyComments(client, desired.table, pgSchema);
-  const commentOps = planTableComments(desired.table, desired, pgSchema, currentTableComment, currentColumnComments, currentIndexComments, currentTriggerComments, currentConstraintComments, currentPolicyComments);
+  const commentOps = planTableComments(
+    desired.table,
+    desired,
+    pgSchema,
+    currentTableComment,
+    currentColumnComments,
+    currentIndexComments,
+    currentTriggerComments,
+    currentConstraintComments,
+    currentPolicyComments,
+  );
   // Index comments must run in validate phase (after CONCURRENTLY index creation)
   for (const op of commentOps) {
     if (op.sql.includes("COMMENT ON INDEX")) {
@@ -877,27 +919,6 @@ function planEnableRLS(tableName: string, pgSchema: string, force: boolean): Ope
   return ops;
 }
 
-function planDisableRLS(tableName: string, pgSchema: string): Operation[] {
-  const ops: Operation[] = [];
-  ops.push({
-    type: "disable_rls",
-    table: tableName,
-    sql: `ALTER TABLE "${pgSchema}"."${tableName}" NO FORCE ROW LEVEL SECURITY;`,
-    description: `Remove force RLS on ${tableName}`,
-    phase: "structure",
-    destructive: true,
-  });
-  ops.push({
-    type: "disable_rls",
-    table: tableName,
-    sql: `ALTER TABLE "${pgSchema}"."${tableName}" DISABLE ROW LEVEL SECURITY;`,
-    description: `Disable RLS on ${tableName}`,
-    phase: "structure",
-    destructive: true,
-  });
-  return ops;
-}
-
 function planCreatePolicy(tableName: string, policy: PolicyDef, pgSchema: string): Operation {
   const permissive = policy.permissive === false ? "RESTRICTIVE" : "PERMISSIVE";
   const forClause = policy.for;
@@ -932,12 +953,7 @@ function planDropPolicy(tableName: string, policyName: string, pgSchema: string,
   };
 }
 
-function planPolicyDiff(
-  tableName: string,
-  desired: PolicyDef[],
-  current: PolicyDef[],
-  pgSchema: string,
-): Operation[] {
+function planPolicyDiff(tableName: string, desired: PolicyDef[], current: PolicyDef[], pgSchema: string): Operation[] {
   const ops: Operation[] = [];
   const currentMap = new Map(current.map((p) => [p.name, p]));
   const desiredMap = new Map(desired.map((p) => [p.name, p]));
@@ -1114,11 +1130,7 @@ function isIntegerType(t: string): boolean {
 
 // ─── Enum Planning ───────────────────────────────────────────────────────────
 
-async function planEnums(
-  client: pg.PoolClient,
-  desiredEnums: EnumSchema[],
-  pgSchema: string,
-): Promise<Operation[]> {
+async function planEnums(client: pg.PoolClient, desiredEnums: EnumSchema[], pgSchema: string): Promise<Operation[]> {
   const ops: Operation[] = [];
   const existingEnums = await getExistingEnums(client, pgSchema);
   const existingMap = new Map(existingEnums.map((e) => [e.name, e]));
@@ -1195,11 +1207,7 @@ async function planExtensions(
 
 // ─── View Planning ───────────────────────────────────────────────────────────
 
-async function planViews(
-  client: pg.PoolClient,
-  desiredViews: ViewSchema[],
-  pgSchema: string,
-): Promise<Operation[]> {
+async function planViews(client: pg.PoolClient, desiredViews: ViewSchema[], pgSchema: string): Promise<Operation[]> {
   const ops: Operation[] = [];
   const existingViews = await getExistingViews(client, pgSchema);
   const existingMap = new Map(existingViews.map((v) => [v.name, v]));
@@ -1459,7 +1467,12 @@ async function planUniqueConstraintDiff(
 }
 
 function normalizeIndexColumns(cols: string[]): string[] {
-  return cols.map((c) => c.replace(/^"(.*)"$/, "$1").trim().toLowerCase());
+  return cols.map((c) =>
+    c
+      .replace(/^"(.*)"$/, "$1")
+      .trim()
+      .toLowerCase(),
+  );
 }
 
 function normalizeWhere(w?: string): string {
@@ -1601,7 +1614,5 @@ function isExpression(col: string): boolean {
 
 /** Format columns for CREATE INDEX, quoting identifiers but not expressions */
 function formatIndexColumns(columns: string[]): string {
-  return columns
-    .map((c) => (isExpression(c) ? c : `"${c}"`))
-    .join(", ");
+  return columns.map((c) => (isExpression(c) ? c : `"${c}"`)).join(", ");
 }

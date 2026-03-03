@@ -20,9 +20,17 @@ import {
   useTestProject,
 } from "./helpers.js";
 import { resolveConfig } from "../src/core/config.js";
-import { runAll, runPre, runMigrate, runPost, runValidate, tryAdvisoryLock, releaseAdvisoryLock } from "../src/executor/index.js";
+import {
+  runAll,
+  runPre,
+  runMigrate,
+  runPost,
+  runValidate,
+  tryAdvisoryLock,
+  releaseAdvisoryLock,
+} from "../src/executor/index.js";
 import { logger, LogLevel } from "../src/core/logger.js";
-import { closePool, getPool } from "../src/core/db.js";
+import { closePool } from "../src/core/db.js";
 
 // Suppress logs during tests
 logger.setLevel(LogLevel.SILENT);
@@ -971,10 +979,7 @@ columns:
 
   it("safe NOT NULL via 4-step pattern", async () => {
     // Create table with nullable column
-    await execSql(
-      ctx.connectionString,
-      `CREATE TABLE items (id serial PRIMARY KEY, name text)`,
-    );
+    await execSql(ctx.connectionString, `CREATE TABLE items (id serial PRIMARY KEY, name text)`);
     // Insert data so there are no NULLs
     await execSql(ctx.connectionString, `INSERT INTO items (name) VALUES ('test')`);
 

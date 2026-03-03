@@ -11,11 +11,15 @@ describe("extensions", () => {
     it("parses a valid extensions file", () => {
       const project = createTempProject();
       try {
-        const filePath = writeSchema(project.schemaDir, "extensions.yaml", `
+        const filePath = writeSchema(
+          project.schemaDir,
+          "extensions.yaml",
+          `
 extensions:
   - pgcrypto
   - pg_trgm
-`);
+`,
+        );
         const result = parseExtensionsFile(filePath);
         expect(result.extensions).toEqual(["pgcrypto", "pg_trgm"]);
       } finally {
@@ -27,7 +31,7 @@ extensions:
       const project = createTempProject();
       try {
         const filePath = writeSchema(project.schemaDir, "bad.yaml", `other: value`);
-        expect(() => parseExtensionsFile(filePath)).toThrow("expected \"extensions\" key");
+        expect(() => parseExtensionsFile(filePath)).toThrow('expected "extensions" key');
       } finally {
         project.cleanup();
       }

@@ -2,12 +2,25 @@
 // Public API — for programmatic usage
 
 export { resolveConfig, type SchemaFlowConfig } from "./core/config.js";
-export { loadConfigFile, resolveEnvironmentConfig, type ConfigFile, type EnvironmentConfig } from "./core/config-file.js";
+export {
+  loadConfigFile,
+  resolveEnvironmentConfig,
+  type ConfigFile,
+  type EnvironmentConfig,
+} from "./core/config-file.js";
 export { logger, LogLevel } from "./core/logger.js";
 export { FileTracker } from "./core/tracker.js";
 export { testConnection, closePool, withClient, withTransaction } from "./core/db.js";
 export { discoverSchemaFiles, discoverScripts, utcTimestamp } from "./core/files.js";
-export { parseTableFile, parseFunctionFile, parseMixinFile, parseEnumFile, parseExtensionsFile, parseViewFile, parseMaterializedViewFile } from "./schema/parser.js";
+export {
+  parseTableFile,
+  parseFunctionFile,
+  parseMixinFile,
+  parseEnumFile,
+  parseExtensionsFile,
+  parseViewFile,
+  parseMaterializedViewFile,
+} from "./schema/parser.js";
 export type {
   TableSchema,
   ColumnDef,
@@ -26,7 +39,19 @@ export type {
 } from "./schema/types.js";
 export { loadMixins, expandMixins } from "./schema/mixins.js";
 export { buildPlan, normalizeType, type MigrationPlan, type Operation, type PlanOptions } from "./planner/index.js";
-export { runAll, runPre, runMigrate, runPost, runValidate, runBaseline, runRepeatables, type ExecutionResult, type Phase, type BaselineResult, type RepeatableResult } from "./executor/index.js";
+export {
+  runAll,
+  runPre,
+  runMigrate,
+  runPost,
+  runValidate,
+  runBaseline,
+  runRepeatables,
+  type ExecutionResult,
+  type Phase,
+  type BaselineResult,
+  type RepeatableResult,
+} from "./executor/index.js";
 export { scaffoldPre, scaffoldPost, generateFromDb, scaffoldInit, scaffoldMixin } from "./scaffold/index.js";
 export {
   introspectTable,

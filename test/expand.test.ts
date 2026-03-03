@@ -111,7 +111,9 @@ describe("Expand/Contract", () => {
   describe("planContractColumn", () => {
     it("produces 3 operations: drop trigger, drop function, drop column", () => {
       const ops = planContractColumn(
-        "users", "name", "full_name",
+        "users",
+        "name",
+        "full_name",
         "_sf_dw_users_name_full_name",
         "_sf_dw_users_name_full_name",
         "public",
@@ -124,7 +126,9 @@ describe("Expand/Contract", () => {
 
     it("drops trigger on correct table", () => {
       const ops = planContractColumn(
-        "users", "name", "full_name",
+        "users",
+        "name",
+        "full_name",
         "_sf_dw_users_name_full_name",
         "_sf_dw_users_name_full_name",
         "public",
@@ -135,7 +139,9 @@ describe("Expand/Contract", () => {
 
     it("drops function", () => {
       const ops = planContractColumn(
-        "users", "name", "full_name",
+        "users",
+        "name",
+        "full_name",
         "_sf_dw_users_name_full_name",
         "_sf_dw_users_name_full_name",
         "public",
@@ -145,7 +151,9 @@ describe("Expand/Contract", () => {
 
     it("drops old column and marks as destructive", () => {
       const ops = planContractColumn(
-        "users", "name", "full_name",
+        "users",
+        "name",
+        "full_name",
         "_sf_dw_users_name_full_name",
         "_sf_dw_users_name_full_name",
         "public",
@@ -156,7 +164,9 @@ describe("Expand/Contract", () => {
 
     it("carries contract meta", () => {
       const ops = planContractColumn(
-        "users", "name", "full_name",
+        "users",
+        "name",
+        "full_name",
         "_sf_dw_users_name_full_name",
         "_sf_dw_users_name_full_name",
         "public",

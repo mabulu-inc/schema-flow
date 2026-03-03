@@ -19,13 +19,17 @@ describe("repeatable migrations", () => {
 
   it("executes new repeatable SQL files", async () => {
     // Create a table first so the grant has something to target
-    writeSchema(ctx.project.schemaDir, "items.yaml", `
+    writeSchema(
+      ctx.project.schemaDir,
+      "items.yaml",
+      `
 table: items
 columns:
   - name: id
     type: serial
     primary_key: true
-`);
+`,
+    );
 
     const config = resolveConfig({
       connectionString: ctx.connectionString,
@@ -36,25 +40,34 @@ columns:
     await runMigrate(config);
 
     // Write a repeatable script
-    writeRepeatable(ctx.project.baseDir, "create_test_table.sql", `
+    writeRepeatable(
+      ctx.project.baseDir,
+      "create_test_table.sql",
+      `
       CREATE TABLE IF NOT EXISTS repeatable_test (id serial PRIMARY KEY);
-    `);
+    `,
+    );
 
     const result = await runRepeatables(config);
     expect(result.success).toBe(true);
     expect(result.filesExecuted).toBe(1);
 
     // Verify the table was created
-    const res = await execSql(ctx.connectionString,
-      `SELECT 1 FROM information_schema.tables WHERE table_name = 'repeatable_test'`
+    const res = await execSql(
+      ctx.connectionString,
+      `SELECT 1 FROM information_schema.tables WHERE table_name = 'repeatable_test'`,
     );
     expect(res.rowCount).toBe(1);
   });
 
   it("skips unchanged repeatable files", async () => {
-    writeRepeatable(ctx.project.baseDir, "idempotent.sql", `
+    writeRepeatable(
+      ctx.project.baseDir,
+      "idempotent.sql",
+      `
       CREATE TABLE IF NOT EXISTS rep_skip (id serial PRIMARY KEY);
-    `);
+    `,
+    );
 
     const config = resolveConfig({
       connectionString: ctx.connectionString,

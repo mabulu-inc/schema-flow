@@ -6,7 +6,24 @@ import path from "node:path";
 import { stringify as toYaml } from "yaml";
 import type { SchemaFlowConfig } from "../core/config.js";
 import type { TableSchema } from "../schema/types.js";
-import { getExistingTables, introspectTable, getExistingFunctions, getExistingEnums, getExistingExtensions, getExistingViews, getExistingMaterializedViews, getTableComment, getColumnComments, getEnumComment, getViewComment, getMaterializedViewComment, getFunctionComment, getIndexComments, getTriggerComments, getPolicyComments } from "../introspect/index.js";
+import {
+  getExistingTables,
+  introspectTable,
+  getExistingFunctions,
+  getExistingEnums,
+  getExistingExtensions,
+  getExistingViews,
+  getExistingMaterializedViews,
+  getTableComment,
+  getColumnComments,
+  getEnumComment,
+  getViewComment,
+  getMaterializedViewComment,
+  getFunctionComment,
+  getIndexComments,
+  getTriggerComments,
+  getPolicyComments,
+} from "../introspect/index.js";
 import { withClient } from "../core/db.js";
 import { logger } from "../core/logger.js";
 import { utcTimestamp } from "../core/files.js";
@@ -222,37 +239,37 @@ function tableSchemaToYaml(schema: TableSchema): string {
   }
 
   obj.columns = schema.columns.map((col) => {
-      const colObj: Record<string, unknown> = {
-        name: col.name,
-        type: col.type,
+    const colObj: Record<string, unknown> = {
+      name: col.name,
+      type: col.type,
+    };
+
+    if (col.primary_key) colObj.primary_key = true;
+    if (col.nullable === true) colObj.nullable = true;
+    if (col.unique) colObj.unique = true;
+    if (col.unique_name) colObj.unique_name = col.unique_name;
+    if (col.default !== undefined) colObj.default = col.default;
+    if (col.generated) colObj.generated = col.generated;
+    if (col.comment) colObj.comment = col.comment;
+    if (col.references) {
+      const refsObj: Record<string, unknown> = {
+        table: col.references.table,
+        column: col.references.column,
       };
-
-      if (col.primary_key) colObj.primary_key = true;
-      if (col.nullable === true) colObj.nullable = true;
-      if (col.unique) colObj.unique = true;
-      if (col.unique_name) colObj.unique_name = col.unique_name;
-      if (col.default !== undefined) colObj.default = col.default;
-      if (col.generated) colObj.generated = col.generated;
-      if (col.comment) colObj.comment = col.comment;
-      if (col.references) {
-        const refsObj: Record<string, unknown> = {
-          table: col.references.table,
-          column: col.references.column,
-        };
-        if (col.references.name) refsObj.name = col.references.name;
-        if (col.references.on_delete && col.references.on_delete !== "NO ACTION") {
-          refsObj.on_delete = col.references.on_delete;
-        }
-        if (col.references.on_update && col.references.on_update !== "NO ACTION") {
-          refsObj.on_update = col.references.on_update;
-        }
-        if (col.references.deferrable) refsObj.deferrable = true;
-        if (col.references.initially_deferred) refsObj.initially_deferred = true;
-        colObj.references = refsObj;
+      if (col.references.name) refsObj.name = col.references.name;
+      if (col.references.on_delete && col.references.on_delete !== "NO ACTION") {
+        refsObj.on_delete = col.references.on_delete;
       }
+      if (col.references.on_update && col.references.on_update !== "NO ACTION") {
+        refsObj.on_update = col.references.on_update;
+      }
+      if (col.references.deferrable) refsObj.deferrable = true;
+      if (col.references.initially_deferred) refsObj.initially_deferred = true;
+      colObj.references = refsObj;
+    }
 
-      return colObj;
-    });
+    return colObj;
+  });
 
   if (schema.primary_key && schema.primary_key.length > 0) {
     obj.primary_key = schema.primary_key;
@@ -336,14 +353,17 @@ function tableSchemaToYaml(schema: TableSchema): string {
 }
 
 /** Convert a DB function to YAML */
-function functionToYaml(fn: {
-  routine_name: string;
-  external_language: string;
-  data_type: string;
-  routine_definition: string;
-  parameter_list: string;
-  security_type?: string;
-}, comment?: string | null): string {
+function functionToYaml(
+  fn: {
+    routine_name: string;
+    external_language: string;
+    data_type: string;
+    routine_definition: string;
+    parameter_list: string;
+    security_type?: string;
+  },
+  comment?: string | null,
+): string {
   const obj: Record<string, unknown> = {
     name: fn.routine_name,
     language: fn.external_language?.toLowerCase() || "plpgsql",

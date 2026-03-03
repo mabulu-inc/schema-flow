@@ -20,10 +20,7 @@ export interface BackfillResult {
 }
 
 /** Run a batched backfill — each batch in its own transaction */
-export async function runBackfill(
-  pool: pg.Pool,
-  options: BackfillOptions,
-): Promise<BackfillResult> {
+export async function runBackfill(pool: pg.Pool, options: BackfillOptions): Promise<BackfillResult> {
   const { tableName, newColumn, transform, batchSize, pgSchema } = options;
   const qualifiedTable = `"${pgSchema}"."${tableName}"`;
   let totalRows = 0;

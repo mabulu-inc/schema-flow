@@ -99,9 +99,7 @@ describe("expandMixins", () => {
         "timestamps",
         {
           mixin: "timestamps",
-          columns: [
-            { name: "created_at", type: "timestamptz", default: "now()" },
-          ],
+          columns: [{ name: "created_at", type: "timestamptz", default: "now()" }],
         },
       ],
     ]);
@@ -204,9 +202,7 @@ describe("expandMixins", () => {
   });
 
   it("handles empty mixins gracefully", () => {
-    const mixinMap = new Map<string, MixinSchema>([
-      ["empty", { mixin: "empty" }],
-    ]);
+    const mixinMap = new Map<string, MixinSchema>([["empty", { mixin: "empty" }]]);
 
     const schemas: TableSchema[] = [
       {

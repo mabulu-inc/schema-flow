@@ -117,31 +117,20 @@ export function expandMixins(schemas: TableSchema[], mixinMap: Map<string, Mixin
 
     // Merge columns: mixin first, table overrides on name clash
     const tableColNames = new Set(schema.columns.map((c) => c.name));
-    const mergedColumns: ColumnDef[] = [
-      ...mixinColumns.filter((c) => !tableColNames.has(c.name)),
-      ...schema.columns,
-    ];
+    const mergedColumns: ColumnDef[] = [...mixinColumns.filter((c) => !tableColNames.has(c.name)), ...schema.columns];
 
     // Merge indexes, checks, triggers, policies: mixin entries before table entries
     const mergedIndexes =
-      mixinIndexes.length > 0 || schema.indexes
-        ? [...mixinIndexes, ...(schema.indexes || [])]
-        : undefined;
+      mixinIndexes.length > 0 || schema.indexes ? [...mixinIndexes, ...(schema.indexes || [])] : undefined;
 
     const mergedChecks =
-      mixinChecks.length > 0 || schema.checks
-        ? [...mixinChecks, ...(schema.checks || [])]
-        : undefined;
+      mixinChecks.length > 0 || schema.checks ? [...mixinChecks, ...(schema.checks || [])] : undefined;
 
     const mergedTriggers =
-      mixinTriggers.length > 0 || schema.triggers
-        ? [...mixinTriggers, ...(schema.triggers || [])]
-        : undefined;
+      mixinTriggers.length > 0 || schema.triggers ? [...mixinTriggers, ...(schema.triggers || [])] : undefined;
 
     const mergedPolicies =
-      mixinPolicies.length > 0 || schema.policies
-        ? [...mixinPolicies, ...(schema.policies || [])]
-        : undefined;
+      mixinPolicies.length > 0 || schema.policies ? [...mixinPolicies, ...(schema.policies || [])] : undefined;
 
     const { use: _, ...rest } = schema;
 

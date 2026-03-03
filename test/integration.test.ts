@@ -229,7 +229,10 @@ query: "SELECT id, email FROM users WHERE is_active = true"
       expect(await viewExists(ctx.connectionString, "active_users")).toBe(true);
 
       // Insert data and query the view
-      await execSql(ctx.connectionString, `INSERT INTO users (email, is_active) VALUES ('a@b.com', true), ('c@d.com', false)`);
+      await execSql(
+        ctx.connectionString,
+        `INSERT INTO users (email, is_active) VALUES ('a@b.com', true), ('c@d.com', false)`,
+      );
       const res = await execSql(ctx.connectionString, `SELECT * FROM active_users`);
       expect(res.rowCount).toBe(1);
       expect(res.rows[0].email).toBe("a@b.com");
@@ -282,7 +285,10 @@ query: "SELECT id, email FROM users"
       expect(result.success).toBe(true);
 
       // Insert data and verify updated view returns all users
-      await execSql(ctx.connectionString, `INSERT INTO users (email, is_active) VALUES ('a@b.com', true), ('c@d.com', false)`);
+      await execSql(
+        ctx.connectionString,
+        `INSERT INTO users (email, is_active) VALUES ('a@b.com', true), ('c@d.com', false)`,
+      );
       const res = await execSql(ctx.connectionString, `SELECT * FROM active_users`);
       expect(res.rowCount).toBe(2);
     });

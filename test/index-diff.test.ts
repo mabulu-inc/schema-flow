@@ -26,21 +26,25 @@ describe("index diffing", () => {
     });
 
     it("parses a WHERE clause", () => {
-      const result = parseIndexDefFull(`CREATE INDEX idx_active ON public.users USING btree (email) WHERE (active = true)`);
+      const result = parseIndexDefFull(
+        `CREATE INDEX idx_active ON public.users USING btree (email) WHERE (active = true)`,
+      );
       expect(result.where).toContain("active");
     });
   });
 
   describe("enhanced planCreateIndex", () => {
     it("creates index with GIN method", async () => {
-      const desired: TableSchema[] = [{
-        table: "items",
-        columns: [
-          { name: "id", type: "serial", primary_key: true },
-          { name: "data", type: "jsonb", nullable: true },
-        ],
-        indexes: [{ columns: ["data"], method: "gin", name: "idx_items_data" }],
-      }];
+      const desired: TableSchema[] = [
+        {
+          table: "items",
+          columns: [
+            { name: "id", type: "serial", primary_key: true },
+            { name: "data", type: "jsonb", nullable: true },
+          ],
+          indexes: [{ columns: ["data"], method: "gin", name: "idx_items_data" }],
+        },
+      ];
 
       const plan = await buildPlan(ctx.client, desired, "public");
       const idxOp = plan.structureOps.find((o) => o.type === "add_index" && o.sql.includes("gin"));
@@ -49,14 +53,16 @@ describe("index diffing", () => {
     });
 
     it("creates index with expression columns (not quoted)", async () => {
-      const desired: TableSchema[] = [{
-        table: "users",
-        columns: [
-          { name: "id", type: "serial", primary_key: true },
-          { name: "email", type: "text" },
-        ],
-        indexes: [{ columns: ["lower(email)"], unique: true, name: "idx_users_email_lower" }],
-      }];
+      const desired: TableSchema[] = [
+        {
+          table: "users",
+          columns: [
+            { name: "id", type: "serial", primary_key: true },
+            { name: "email", type: "text" },
+          ],
+          indexes: [{ columns: ["lower(email)"], unique: true, name: "idx_users_email_lower" }],
+        },
+      ];
 
       const plan = await buildPlan(ctx.client, desired, "public");
       const idxOp = plan.structureOps.find((o) => o.type === "add_index" && o.sql.includes("lower(email)"));
@@ -66,15 +72,17 @@ describe("index diffing", () => {
     });
 
     it("creates index with INCLUDE columns", async () => {
-      const desired: TableSchema[] = [{
-        table: "users",
-        columns: [
-          { name: "id", type: "serial", primary_key: true },
-          { name: "email", type: "text" },
-          { name: "name", type: "text" },
-        ],
-        indexes: [{ columns: ["email"], include: ["name"], name: "idx_users_email_covering" }],
-      }];
+      const desired: TableSchema[] = [
+        {
+          table: "users",
+          columns: [
+            { name: "id", type: "serial", primary_key: true },
+            { name: "email", type: "text" },
+            { name: "name", type: "text" },
+          ],
+          indexes: [{ columns: ["email"], include: ["name"], name: "idx_users_email_covering" }],
+        },
+      ];
 
       const plan = await buildPlan(ctx.client, desired, "public");
       const idxOp = plan.structureOps.find((o) => o.type === "add_index" && o.sql.includes("INCLUDE"));
@@ -83,14 +91,16 @@ describe("index diffing", () => {
     });
 
     it("creates index with opclass", async () => {
-      const desired: TableSchema[] = [{
-        table: "items",
-        columns: [
-          { name: "id", type: "serial", primary_key: true },
-          { name: "data", type: "jsonb", nullable: true },
-        ],
-        indexes: [{ columns: ["data"], method: "gin", opclass: "jsonb_path_ops", name: "idx_items_data_pathops" }],
-      }];
+      const desired: TableSchema[] = [
+        {
+          table: "items",
+          columns: [
+            { name: "id", type: "serial", primary_key: true },
+            { name: "data", type: "jsonb", nullable: true },
+          ],
+          indexes: [{ columns: ["data"], method: "gin", opclass: "jsonb_path_ops", name: "idx_items_data_pathops" }],
+        },
+      ];
 
       const plan = await buildPlan(ctx.client, desired, "public");
       const idxOp = plan.structureOps.find((o) => o.type === "add_index" && o.sql.includes("jsonb_path_ops"));
@@ -102,14 +112,16 @@ describe("index diffing", () => {
     it("detects new index needed on existing table", async () => {
       await ctx.client.query(`CREATE TABLE users (id serial PRIMARY KEY, email text NOT NULL)`);
 
-      const desired: TableSchema[] = [{
-        table: "users",
-        columns: [
-          { name: "id", type: "serial", primary_key: true },
-          { name: "email", type: "text" },
-        ],
-        indexes: [{ columns: ["email"], name: "idx_users_email" }],
-      }];
+      const desired: TableSchema[] = [
+        {
+          table: "users",
+          columns: [
+            { name: "id", type: "serial", primary_key: true },
+            { name: "email", type: "text" },
+          ],
+          indexes: [{ columns: ["email"], name: "idx_users_email" }],
+        },
+      ];
 
       const plan = await buildPlan(ctx.client, desired, "public");
       const idxOp = plan.structureOps.find((o) => o.type === "add_index" && o.sql.includes("idx_users_email"));
@@ -120,14 +132,16 @@ describe("index diffing", () => {
       await ctx.client.query(`CREATE TABLE users (id serial PRIMARY KEY, email text NOT NULL)`);
       await ctx.client.query(`CREATE INDEX idx_users_email ON users (email)`);
 
-      const desired: TableSchema[] = [{
-        table: "users",
-        columns: [
-          { name: "id", type: "serial", primary_key: true },
-          { name: "email", type: "text" },
-        ],
-        // No indexes
-      }];
+      const desired: TableSchema[] = [
+        {
+          table: "users",
+          columns: [
+            { name: "id", type: "serial", primary_key: true },
+            { name: "email", type: "text" },
+          ],
+          // No indexes
+        },
+      ];
 
       const plan = await buildPlan(ctx.client, desired, "public");
       const blocked = plan.blocked.find((o) => o.type === "drop_index" && o.sql.includes("idx_users_email"));
@@ -139,14 +153,16 @@ describe("index diffing", () => {
       await ctx.client.query(`CREATE TABLE users (id serial PRIMARY KEY, email text NOT NULL)`);
       await ctx.client.query(`CREATE INDEX idx_users_email ON users (email)`);
 
-      const desired: TableSchema[] = [{
-        table: "users",
-        columns: [
-          { name: "id", type: "serial", primary_key: true },
-          { name: "email", type: "text" },
-        ],
-        indexes: [{ columns: ["email"], name: "idx_users_email" }],
-      }];
+      const desired: TableSchema[] = [
+        {
+          table: "users",
+          columns: [
+            { name: "id", type: "serial", primary_key: true },
+            { name: "email", type: "text" },
+          ],
+          indexes: [{ columns: ["email"], name: "idx_users_email" }],
+        },
+      ];
 
       const plan = await buildPlan(ctx.client, desired, "public");
       const indexOps = plan.operations.filter((o) => o.type === "add_index" || o.type === "drop_index");

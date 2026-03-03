@@ -4,7 +4,20 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { parse as parseYaml } from "yaml";
-import type { TableSchema, FunctionSchema, ColumnDef, TriggerDef, PolicyDef, MixinSchema, PrecheckDef, EnumSchema, ExtensionsSchema, ViewSchema, MaterializedViewSchema, UniqueConstraintDef } from "./types.js";
+import type {
+  TableSchema,
+  FunctionSchema,
+  ColumnDef,
+  TriggerDef,
+  PolicyDef,
+  MixinSchema,
+  PrecheckDef,
+  EnumSchema,
+  ExtensionsSchema,
+  ViewSchema,
+  MaterializedViewSchema,
+  UniqueConstraintDef,
+} from "./types.js";
 import { logger } from "../core/logger.js";
 
 /** Parse a single column definition from raw YAML */
@@ -24,7 +37,10 @@ export function parseColumnDef(col: Record<string, unknown>, filePath: string): 
       ? {
           table: (col.references as Record<string, unknown>).table as string,
           column: (col.references as Record<string, unknown>).column as string,
-          name: (col.references as Record<string, unknown>).name !== undefined ? String((col.references as Record<string, unknown>).name) : undefined,
+          name:
+            (col.references as Record<string, unknown>).name !== undefined
+              ? String((col.references as Record<string, unknown>).name)
+              : undefined,
           on_delete: (col.references as Record<string, string>).on_delete as ColumnDef["references"] extends {
             on_delete?: infer T;
           }
@@ -35,8 +51,12 @@ export function parseColumnDef(col: Record<string, unknown>, filePath: string): 
           }
             ? T
             : never,
-          deferrable: (col.references as Record<string, unknown>).deferrable ? Boolean((col.references as Record<string, unknown>).deferrable) : undefined,
-          initially_deferred: (col.references as Record<string, unknown>).initially_deferred ? Boolean((col.references as Record<string, unknown>).initially_deferred) : undefined,
+          deferrable: (col.references as Record<string, unknown>).deferrable
+            ? Boolean((col.references as Record<string, unknown>).deferrable)
+            : undefined,
+          initially_deferred: (col.references as Record<string, unknown>).initially_deferred
+            ? Boolean((col.references as Record<string, unknown>).initially_deferred)
+            : undefined,
         }
       : undefined,
     expand: col.expand

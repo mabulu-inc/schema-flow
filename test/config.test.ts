@@ -14,7 +14,9 @@ describe("config file", () => {
   it("loads a config file with environments", () => {
     const { dir, cleanup } = tempDir();
     try {
-      writeFileSync(path.join(dir, "schema-flow.config.yaml"), `
+      writeFileSync(
+        path.join(dir, "schema-flow.config.yaml"),
+        `
 environments:
   development:
     connectionString: postgres://localhost:5432/dev
@@ -22,7 +24,9 @@ environments:
   production:
     connectionString: postgres://prod:5432/app
     pgSchema: app
-`, "utf-8");
+`,
+        "utf-8",
+      );
 
       const config = loadConfigFile(dir);
       expect(config).not.toBeNull();
@@ -38,11 +42,15 @@ environments:
     const { dir, cleanup } = tempDir();
     try {
       process.env.SF_TEST_DB_URL = "postgres://test:5432/testdb";
-      writeFileSync(path.join(dir, "schema-flow.config.yaml"), `
+      writeFileSync(
+        path.join(dir, "schema-flow.config.yaml"),
+        `
 environments:
   test:
     connectionString: \${SF_TEST_DB_URL}
-`, "utf-8");
+`,
+        "utf-8",
+      );
 
       const config = loadConfigFile(dir);
       expect(config!.environments!.test.connectionString).toBe("postgres://test:5432/testdb");
@@ -81,11 +89,15 @@ environments:
   it("loads .yml extension", () => {
     const { dir, cleanup } = tempDir();
     try {
-      writeFileSync(path.join(dir, "schema-flow.config.yml"), `
+      writeFileSync(
+        path.join(dir, "schema-flow.config.yml"),
+        `
 environments:
   dev:
     connectionString: postgres://dev:5432/db
-`, "utf-8");
+`,
+        "utf-8",
+      );
 
       const config = loadConfigFile(dir);
       expect(config).not.toBeNull();
