@@ -38,6 +38,7 @@ schema-flow/
   pre/        ← Pre-migration SQL scripts (run before schema changes)
   post/       ← Post-migration SQL scripts (run after schema changes)
   mixins/     ← Reusable schema mixins (timestamps, soft_delete, etc.)
+  repeatable/ ← SQL scripts re-run whenever their content changes (grants, refresh, etc.)
 ```
 
 ### 2. Define your tables
@@ -135,6 +136,7 @@ npx @mabulu-inc/schema-flow run
 | `schema-flow contract` | Finalize expand/contract: drop old columns and triggers |
 | `schema-flow expand-status` | Show current expand/contract operation status |
 | `schema-flow status` | Show pending changes |
+| `schema-flow baseline` | Mark existing database as managed without running migrations |
 | `schema-flow generate` | Generate YAML schema files from an existing database |
 | `schema-flow new pre <name>` | Scaffold a timestamped pre-migration script |
 | `schema-flow new post <name>` | Scaffold a timestamped post-migration script |
@@ -162,6 +164,7 @@ npx @mabulu-inc/schema-flow <command> [options]
 | `--name <name>` | Output file name suffix (`sql`) |
 | `--skip-checks` | Skip pre-migration checks |
 | `--apply` | Execute the operation (`down`) |
+| `--env <name>` | Select environment from config file |
 | `--connection-string`, `--db` | PostgreSQL connection string |
 | `--dir` | Base directory (default: cwd) |
 | `--schema` | PostgreSQL schema (default: `public`) |
@@ -190,9 +193,17 @@ Schema-flow is designed for zero-downtime deployments. By default, it only perfo
 | Force RLS | ✓ | |
 | Create policy | ✓ | |
 | Replace policy (changed definition) | ✓ | |
+| Create enum | ✓ | |
+| Add enum value | ✓ | |
+| Create extension | ✓ | |
+| Create/replace view | ✓ | |
+| Set comment (table or column) | ✓ | |
 | Drop trigger (removed from YAML) | | ✓ |
 | Drop policy (removed from YAML) | | ✓ |
 | Disable RLS (removed from YAML) | | ✓ |
+| Drop extension | | ✓ |
+| Create/drop materialized view | ✓ / ✓ | |
+| Drop index | | ✓ |
 | Drop column | | ✓ |
 | Narrow type (bigint → int) | | ✓ |
 
@@ -283,11 +294,15 @@ Adding a unique constraint to an existing column avoids a table lock:
 ### Execution Order
 
 ```
-1. Functions               (in transaction)
-2. Structure ops — non-index (in transaction)  ← includes ADD CONSTRAINT ... NOT VALID
-3. Structure ops — indexes   (outside txn)     ← CONCURRENTLY
-4. FK ops                    (in transaction)   ← NOT VALID
-5. Validate ops              (outside txn)     ← VALIDATE CONSTRAINT, SET NOT NULL, cleanup
+1. Extensions               (in transaction)   ← CREATE EXTENSION IF NOT EXISTS
+2. Enums                     (in transaction)   ← CREATE TYPE / ADD VALUE
+3. Functions                 (in transaction)
+4. Structure ops — non-index (in transaction)   ← includes ADD CONSTRAINT ... NOT VALID
+5. Structure ops — indexes   (outside txn)      ← CONCURRENTLY
+6. FK ops                    (in transaction)    ← NOT VALID
+7. Validate ops              (outside txn)      ← VALIDATE CONSTRAINT, SET NOT NULL, cleanup
+8. Views                     (in transaction)   ← CREATE OR REPLACE VIEW
+9. Materialized Views        (in transaction)   ← CREATE MATERIALIZED VIEW / REFRESH
 ```
 
 ### Intermediate State Recovery
@@ -309,6 +324,8 @@ Each table gets its own file. Everything about the table — columns, constraint
 | `primary_key` | boolean | `false` | Single-column primary key |
 | `unique` | boolean | `false` | Unique constraint |
 | `references` | object | — | Foreign key definition |
+| `generated` | string | — | SQL expression for generated stored column (`GENERATED ALWAYS AS ... STORED`) |
+| `comment` | string | — | Column description (`COMMENT ON COLUMN`) |
 
 **`default` values** are inserted verbatim into the generated SQL, so SQL string literals need inner single quotes:
 
@@ -327,6 +344,8 @@ references:
   column: id             # Referenced column
   on_delete: CASCADE     # NO ACTION | RESTRICT | CASCADE | SET NULL | SET DEFAULT
   on_update: NO ACTION   # NO ACTION | RESTRICT | CASCADE | SET NULL | SET DEFAULT
+  deferrable: true       # Make the FK constraint deferrable
+  initially_deferred: true  # Defer checking until transaction commit
 ```
 
 ### Composite Primary Key
@@ -345,6 +364,15 @@ indexes:
   - name: idx_active_users
     columns: [is_active]
     where: "is_active = true"    # Partial index
+  - columns: [metadata]
+    method: gin                  # GIN, GiST, BRIN, hash (default: btree)
+  - columns: [metadata]
+    method: gin
+    opclass: jsonb_path_ops      # Operator class
+  - columns: [email]
+    include: [name]              # Covering index (INCLUDE)
+  - columns: ["lower(email)"]   # Expression index (not quoted)
+    unique: true
 ```
 
 ### Check Constraints
@@ -548,6 +576,11 @@ Drift detection finds:
 - Column differences (type, nullable, default, unique)
 - Missing or extra columns, triggers, policies, and functions
 - RLS setting mismatches
+- Enum value mismatches (missing or extra values)
+- Missing or extra extensions
+- View query differences
+- Index mismatches (missing, extra, or different definition)
+- Comment differences (table and column level)
 
 ## Migration Linting
 
@@ -801,10 +834,14 @@ schema-flow looks for a `schema-flow/` directory in the current working director
 ```
 my-project/
   schema-flow/
-    schema/         ← One YAML file per table or function
+    schema/         ← One YAML file per table, function, enum, extension, or view
       users.yaml
       posts.yaml
       fn_update_timestamp.yaml
+      enum_status.yaml
+      extensions.yaml
+      view_active_users.yaml
+      mv_daily_stats.yaml
     mixins/         ← Reusable schema mixins
       timestamps.yaml
       soft_delete.yaml
@@ -812,6 +849,8 @@ my-project/
       20260228153000_rename_column.sql
     post/           ← Post-migration SQL scripts
       20260228160000_seed_roles.sql
+    repeatable/     ← SQL scripts re-run whenever content changes
+      grants.sql
   src/
   package.json
 ```
@@ -828,6 +867,188 @@ Run all commands from your project root — schema-flow automatically finds the 
 | `SCHEMA_FLOW_ALLOW_DESTRUCTIVE` | Set to `true` to allow destructive operations (same as `--allow-destructive`) |
 | `SCHEMA_FLOW_LOCK_TIMEOUT` | Lock timeout for DDL statements (default: `5s`) |
 | `SCHEMA_FLOW_STATEMENT_TIMEOUT` | Statement timeout for DDL statements (default: `30s`) |
+
+## Enums
+
+Define PostgreSQL enum types in `enum_*.yaml` files:
+
+```yaml
+# schema-flow/schema/enum_status.yaml
+enum: status
+values:
+  - active
+  - inactive
+  - suspended
+```
+
+Schema-flow manages the lifecycle automatically:
+- **New enum** → `CREATE TYPE "public"."status" AS ENUM ('active', 'inactive', 'suspended')`
+- **New value added** → `ALTER TYPE "public"."status" ADD VALUE 'suspended'`
+- Values can be added but never removed (PostgreSQL limitation)
+
+Use the enum type in a table column:
+
+```yaml
+table: users
+columns:
+  - name: status
+    type: status
+    default: "'active'"
+```
+
+## Extensions
+
+Declare required PostgreSQL extensions in an `extensions.yaml` file:
+
+```yaml
+# schema-flow/schema/extensions.yaml
+extensions:
+  - pgcrypto
+  - pg_trgm
+  - uuid-ossp
+```
+
+Extensions are created with `CREATE EXTENSION IF NOT EXISTS` and run before all other operations. Dropping an extension requires `--allow-destructive`.
+
+## Views & Materialized Views
+
+**Views** use `view_*.yaml` files:
+
+```yaml
+# schema-flow/schema/view_active_users.yaml
+view: active_users
+query: "SELECT id, email FROM users WHERE is_active = true"
+```
+
+Views are created with `CREATE OR REPLACE VIEW`, so updates are safe and non-destructive.
+
+**Materialized views** use `mv_*.yaml` files:
+
+```yaml
+# schema-flow/schema/mv_daily_stats.yaml
+materialized_view: daily_stats
+query: "SELECT date_trunc('day', created_at) AS day, count(*) AS total FROM events GROUP BY 1"
+indexes:
+  - columns: [day]
+    unique: true
+```
+
+Materialized views support indexes. Dropping a materialized view requires `--allow-destructive`.
+
+## Generated Columns
+
+Declare computed stored columns using the `generated` property:
+
+```yaml
+table: users
+columns:
+  - name: first_name
+    type: text
+  - name: last_name
+    type: text
+  - name: full_name
+    type: text
+    generated: "first_name || ' ' || last_name"
+```
+
+This produces `GENERATED ALWAYS AS (first_name || ' ' || last_name) STORED`. Generated columns cannot have `default` or `NOT NULL` — schema-flow handles this automatically.
+
+**Limitation:** PostgreSQL does not support altering a generated column expression in place. To change an expression, drop and re-add the column (requires `--allow-destructive`).
+
+## Table & Column Comments
+
+Add descriptions to tables and columns:
+
+```yaml
+table: users
+comment: "Core user accounts table"
+columns:
+  - name: id
+    type: serial
+    primary_key: true
+  - name: email
+    type: varchar(255)
+    comment: "User's primary email address"
+```
+
+This generates:
+- `COMMENT ON TABLE "public"."users" IS 'Core user accounts table'`
+- `COMMENT ON COLUMN "public"."users"."email" IS 'User''s primary email address'`
+
+Comments are diffed against the live database — unchanged comments produce no operations.
+
+## Deferrable Foreign Keys
+
+Use `deferrable` and `initially_deferred` for self-referential tables, circular references, or tree structures where you need to insert parent and child rows in the same transaction:
+
+```yaml
+table: nodes
+columns:
+  - name: id
+    type: serial
+    primary_key: true
+  - name: parent_id
+    type: integer
+    nullable: true
+    references:
+      table: nodes
+      column: id
+      deferrable: true
+      initially_deferred: true
+```
+
+With `initially_deferred: true`, the FK constraint is only checked at transaction commit, allowing inserts in any order within the transaction.
+
+## Environment Configuration
+
+Create a `schema-flow.config.yaml` file in your project root to manage multiple environments:
+
+```yaml
+# schema-flow.config.yaml
+environments:
+  development:
+    connectionString: postgresql://localhost:5432/myapp_dev
+    pgSchema: public
+  staging:
+    connectionString: ${STAGING_DB_URL}
+    pgSchema: public
+  production:
+    connectionString: ${PROD_DB_URL}
+    pgSchema: app
+```
+
+Use `${VAR}` syntax for environment variable interpolation. Select an environment with `--env`:
+
+```bash
+npx @mabulu-inc/schema-flow run --env staging
+npx @mabulu-inc/schema-flow drift --env production
+```
+
+**Precedence:** `--connection-string` flag > `--env` config > `SCHEMA_FLOW_DATABASE_URL` > `DATABASE_URL`
+
+## Baseline
+
+Mark an existing database as managed by schema-flow without running any migrations:
+
+```bash
+npx @mabulu-inc/schema-flow baseline
+```
+
+This records all current schema files in the `_schema_flow_history` table with their SHA-256 hashes, so subsequent runs only process new or changed files. Use this when adopting schema-flow on a database that already has the tables defined in your YAML.
+
+## Repeatable Migrations
+
+Place SQL files in `schema-flow/repeatable/` for scripts that should re-run whenever their content changes:
+
+```
+schema-flow/repeatable/
+  grants.sql
+  refresh_views.sql
+```
+
+Repeatable files are tracked by content hash. When the file content changes, the script is re-executed. When unchanged, it is skipped. Repeatables run after all other migration phases.
+
+Common use cases: GRANT/REVOKE statements, materialized view refreshes, function re-definitions that live outside schema YAML.
 
 ## Programmatic API
 

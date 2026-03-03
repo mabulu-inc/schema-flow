@@ -280,6 +280,164 @@ export async function rlsEnabled(connectionString: string, tableName: string): P
 }
 
 /**
+ * Check if an enum type exists in the public schema.
+ */
+export async function enumExists(connectionString: string, enumName: string): Promise<boolean> {
+  const res = await execSql(
+    connectionString,
+    `SELECT 1 FROM pg_type t
+     JOIN pg_namespace n ON t.typnamespace = n.oid
+     WHERE n.nspname = 'public' AND t.typname = $1 AND t.typtype = 'e'`,
+    [enumName],
+  );
+  return res.rowCount !== null && res.rowCount > 0;
+}
+
+/**
+ * Get values of an enum type.
+ */
+export async function getEnumValues(connectionString: string, enumName: string): Promise<string[]> {
+  const res = await execSql(
+    connectionString,
+    `SELECT e.enumlabel
+     FROM pg_enum e
+     JOIN pg_type t ON e.enumtypid = t.oid
+     JOIN pg_namespace n ON t.typnamespace = n.oid
+     WHERE n.nspname = 'public' AND t.typname = $1
+     ORDER BY e.enumsortorder`,
+    [enumName],
+  );
+  return res.rows.map((r: { enumlabel: string }) => r.enumlabel);
+}
+
+/**
+ * Check if a PostgreSQL extension is installed.
+ */
+export async function extensionExists(connectionString: string, extName: string): Promise<boolean> {
+  const res = await execSql(
+    connectionString,
+    `SELECT 1 FROM pg_extension WHERE extname = $1`,
+    [extName],
+  );
+  return res.rowCount !== null && res.rowCount > 0;
+}
+
+/**
+ * Check if a view exists in the public schema.
+ */
+export async function viewExists(connectionString: string, viewName: string): Promise<boolean> {
+  const res = await execSql(
+    connectionString,
+    `SELECT 1 FROM information_schema.views
+     WHERE table_schema = 'public' AND table_name = $1`,
+    [viewName],
+  );
+  return res.rowCount !== null && res.rowCount > 0;
+}
+
+/**
+ * Check if a materialized view exists in the public schema.
+ */
+export async function materializedViewExists(connectionString: string, mvName: string): Promise<boolean> {
+  const res = await execSql(
+    connectionString,
+    `SELECT 1 FROM pg_matviews WHERE schemaname = 'public' AND matviewname = $1`,
+    [mvName],
+  );
+  return res.rowCount !== null && res.rowCount > 0;
+}
+
+/**
+ * Check if an index exists.
+ */
+export async function indexExists(connectionString: string, indexName: string): Promise<boolean> {
+  const res = await execSql(
+    connectionString,
+    `SELECT 1 FROM pg_indexes WHERE schemaname = 'public' AND indexname = $1`,
+    [indexName],
+  );
+  return res.rowCount !== null && res.rowCount > 0;
+}
+
+/**
+ * Get the access method of an index (btree, gin, gist, etc.).
+ */
+export async function getIndexMethod(connectionString: string, indexName: string): Promise<string> {
+  const res = await execSql(
+    connectionString,
+    `SELECT am.amname
+     FROM pg_index i
+     JOIN pg_class c ON i.indexrelid = c.oid
+     JOIN pg_am am ON c.relam = am.oid
+     WHERE c.relname = $1`,
+    [indexName],
+  );
+  return res.rows.length > 0 ? res.rows[0].amname : "";
+}
+
+/**
+ * Get a comment on a table or column. If columnName is omitted, returns the table comment.
+ */
+export async function getComment(
+  connectionString: string,
+  tableName: string,
+  columnName?: string,
+): Promise<string | null> {
+  if (columnName) {
+    const res = await execSql(
+      connectionString,
+      `SELECT col_description(c.oid, a.attnum) AS comment
+       FROM pg_class c
+       JOIN pg_namespace n ON c.relnamespace = n.oid
+       JOIN pg_attribute a ON a.attrelid = c.oid
+       WHERE n.nspname = 'public' AND c.relname = $1 AND a.attname = $2`,
+      [tableName, columnName],
+    );
+    return res.rows.length > 0 ? res.rows[0].comment : null;
+  }
+
+  const res = await execSql(
+    connectionString,
+    `SELECT obj_description(c.oid, 'pg_class') AS comment
+     FROM pg_class c
+     JOIN pg_namespace n ON c.relnamespace = n.oid
+     WHERE n.nspname = 'public' AND c.relname = $1`,
+    [tableName],
+  );
+  return res.rows.length > 0 ? res.rows[0].comment : null;
+}
+
+/**
+ * Check if a constraint is deferrable.
+ */
+export async function isConstraintDeferrable(
+  connectionString: string,
+  constraintName: string,
+): Promise<boolean> {
+  const res = await execSql(
+    connectionString,
+    `SELECT condeferrable FROM pg_constraint WHERE conname = $1`,
+    [constraintName],
+  );
+  return res.rows.length > 0 && res.rows[0].condeferrable === true;
+}
+
+/**
+ * Check if a constraint is initially deferred.
+ */
+export async function isConstraintInitiallyDeferred(
+  connectionString: string,
+  constraintName: string,
+): Promise<boolean> {
+  const res = await execSql(
+    connectionString,
+    `SELECT condeferred FROM pg_constraint WHERE conname = $1`,
+    [constraintName],
+  );
+  return res.rows.length > 0 && res.rows[0].condeferred === true;
+}
+
+/**
  * Check if a constraint is validated (convalidated=true in pg_constraint).
  */
 export async function constraintValidated(
