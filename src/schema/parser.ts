@@ -4,7 +4,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { parse as parseYaml } from "yaml";
-import type { TableSchema, FunctionSchema, ColumnDef, TriggerDef, PolicyDef, MixinSchema, PrecheckDef, ExpandDef, EnumSchema, ExtensionsSchema, ViewSchema, MaterializedViewSchema } from "./types.js";
+import type { TableSchema, FunctionSchema, ColumnDef, TriggerDef, PolicyDef, MixinSchema, PrecheckDef, ExpandDef, EnumSchema, ExtensionsSchema, ViewSchema, MaterializedViewSchema, UniqueConstraintDef } from "./types.js";
 import { logger } from "../core/logger.js";
 
 /** Parse a single column definition from raw YAML */
@@ -19,10 +19,12 @@ export function parseColumnDef(col: Record<string, unknown>, filePath: string): 
     default: col.default !== undefined ? String(col.default) : undefined,
     primary_key: col.primary_key ? Boolean(col.primary_key) : undefined,
     unique: col.unique ? Boolean(col.unique) : undefined,
+    unique_name: col.unique_name !== undefined ? String(col.unique_name) : undefined,
     references: col.references
       ? {
           table: (col.references as Record<string, unknown>).table as string,
           column: (col.references as Record<string, unknown>).column as string,
+          name: (col.references as Record<string, unknown>).name !== undefined ? String((col.references as Record<string, unknown>).name) : undefined,
           on_delete: (col.references as Record<string, string>).on_delete as ColumnDef["references"] extends {
             on_delete?: infer T;
           }
@@ -137,12 +139,27 @@ export function parseTableFile(filePath: string): TableSchema {
     schema.primary_key = raw.primary_key as string[];
   }
 
+  if (raw.primary_key_name !== undefined) {
+    schema.primary_key_name = String(raw.primary_key_name);
+  }
+
   if (raw.indexes && Array.isArray(raw.indexes)) {
     schema.indexes = raw.indexes;
   }
 
   if (raw.checks && Array.isArray(raw.checks)) {
     schema.checks = raw.checks;
+  }
+
+  if (raw.unique_constraints && Array.isArray(raw.unique_constraints)) {
+    schema.unique_constraints = raw.unique_constraints.map((uc: Record<string, unknown>) => {
+      const def: UniqueConstraintDef = {
+        columns: uc.columns as string[],
+      };
+      if (uc.name !== undefined) def.name = String(uc.name);
+      if (uc.comment !== undefined) def.comment = String(uc.comment);
+      return def;
+    });
   }
 
   if (raw.triggers && Array.isArray(raw.triggers)) {

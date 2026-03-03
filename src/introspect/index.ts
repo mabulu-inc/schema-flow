@@ -2,7 +2,7 @@
 // Introspect the current PostgreSQL database state
 
 import pg from "pg";
-import type { TableSchema, ColumnDef, TriggerDef, PolicyDef, EnumSchema, ViewSchema, MaterializedViewSchema, IndexDef } from "../schema/types.js";
+import type { TableSchema, ColumnDef, TriggerDef, PolicyDef, EnumSchema, ViewSchema, MaterializedViewSchema, IndexDef, CheckDef, UniqueConstraintDef } from "../schema/types.js";
 
 export interface DbColumn {
   column_name: string;
@@ -24,12 +24,18 @@ export interface DbConstraint {
   delete_rule: string | null;
   update_rule: string | null;
   convalidated: boolean;
+  condeferrable: boolean;
+  condeferred: boolean;
   check_expression: string | null;
 }
 
 export interface DbIndex {
   indexname: string;
   indexdef: string;
+  /** Constraint type: 'p' = PK, 'u' = UNIQUE, 'f' = FK, null = standalone index */
+  constraint_type?: string | null;
+  /** Name of the constraint this index backs, if any */
+  constraint_name?: string | null;
 }
 
 export interface DbFunction {
@@ -264,6 +270,8 @@ export async function getTableConstraints(
          WHEN 'd' THEN 'SET DEFAULT'
        END AS update_rule,
        c.convalidated,
+       c.condeferrable,
+       c.condeferred,
        pg_get_constraintdef(c.oid) AS check_expression
      FROM pg_constraint c
      JOIN pg_class t ON c.conrelid = t.oid
@@ -280,12 +288,19 @@ export async function getTableConstraints(
   return res.rows;
 }
 
-/** Get indexes for a table */
+/** Get indexes for a table, with constraint relationship metadata via pg_constraint */
 export async function getTableIndexes(client: pg.PoolClient, tableName: string, pgSchema: string): Promise<DbIndex[]> {
   const res = await client.query<DbIndex>(
-    `SELECT indexname, indexdef
-     FROM pg_indexes
-     WHERE schemaname = $1 AND tablename = $2`,
+    `SELECT
+       pi.indexname,
+       pi.indexdef,
+       con.contype AS constraint_type,
+       con.conname AS constraint_name
+     FROM pg_indexes pi
+     JOIN pg_class ci ON ci.relname = pi.indexname AND ci.relkind = 'i'
+     JOIN pg_namespace ni ON ci.relnamespace = ni.oid AND ni.nspname = pi.schemaname
+     LEFT JOIN pg_constraint con ON con.conindid = ci.oid
+     WHERE pi.schemaname = $1 AND pi.tablename = $2`,
     [pgSchema, tableName],
   );
   return res.rows;
@@ -302,17 +317,39 @@ export async function introspectTable(
 
   // Group constraints
   const pkColumns: string[] = [];
-  const uniqueColumns = new Set<string>();
+  let pkConstraintName: string | undefined;
+  const uniqueConstraints = new Map<string, string[]>();
   const fkMap = new Map<string, DbConstraint[]>();
+  const checkConstraints: CheckDef[] = [];
 
   for (const c of dbConstraints) {
     if (c.constraint_type === "PRIMARY KEY") {
       pkColumns.push(c.column_name);
+      pkConstraintName = c.constraint_name;
     } else if (c.constraint_type === "UNIQUE") {
-      uniqueColumns.add(c.column_name);
+      if (!uniqueConstraints.has(c.constraint_name)) uniqueConstraints.set(c.constraint_name, []);
+      uniqueConstraints.get(c.constraint_name)!.push(c.column_name);
     } else if (c.constraint_type === "FOREIGN KEY") {
       if (!fkMap.has(c.constraint_name)) fkMap.set(c.constraint_name, []);
       fkMap.get(c.constraint_name)!.push(c);
+    } else if (c.constraint_type === "CHECK") {
+      // Deduplicate (query returns one row per column for multi-column checks)
+      if (!checkConstraints.some((ch) => ch.name === c.constraint_name)) {
+        let expr = c.check_expression || "";
+        expr = expr.replace(/^CHECK\s*\(\((.*)\)\)$/is, "$1").replace(/^CHECK\s*\((.*)\)$/is, "$1");
+        checkConstraints.push({ name: c.constraint_name, expression: expr });
+      }
+    }
+  }
+
+  // Only mark column unique: true for single-column unique constraints
+  const singleColUniques = new Set<string>();
+  // Map single-column unique constraint names
+  const singleColUniqueNames = new Map<string, string>();
+  for (const [constraintName, cols] of uniqueConstraints) {
+    if (cols.length === 1) {
+      singleColUniques.add(cols[0]);
+      singleColUniqueNames.set(cols[0], constraintName);
     }
   }
 
@@ -337,16 +374,19 @@ export async function introspectTable(
       def.primary_key = true;
     }
 
-    if (uniqueColumns.has(col.column_name)) {
+    if (singleColUniques.has(col.column_name)) {
       def.unique = true;
+      const uqName = singleColUniqueNames.get(col.column_name);
+      if (uqName) def.unique_name = uqName;
     }
 
     // Check for FK on this column (single-column FK)
-    for (const [, fkCols] of fkMap) {
+    for (const [fkConstraintName, fkCols] of fkMap) {
       if (fkCols.length === 1 && fkCols[0].column_name === col.column_name) {
         def.references = {
           table: fkCols[0].foreign_table_name!,
           column: fkCols[0].foreign_column_name!,
+          name: fkConstraintName,
           on_delete: (fkCols[0].delete_rule || "NO ACTION") as ColumnDef["references"] extends { on_delete?: infer T }
             ? T
             : never,
@@ -354,6 +394,8 @@ export async function introspectTable(
             ? T
             : never,
           validated: fkCols[0].convalidated,
+          deferrable: fkCols[0].condeferrable || undefined,
+          initially_deferred: fkCols[0].condeferred || undefined,
         };
       }
     }
@@ -368,6 +410,22 @@ export async function introspectTable(
 
   if (!isSinglePk && pkColumns.length > 1) {
     schema.primary_key = pkColumns;
+  }
+
+  // Capture PK constraint name
+  if (pkConstraintName) {
+    schema.primary_key_name = pkConstraintName;
+  }
+
+  // Capture multi-column unique constraints
+  const multiColUniques: UniqueConstraintDef[] = [];
+  for (const [constraintName, cols] of uniqueConstraints) {
+    if (cols.length > 1) {
+      multiColUniques.push({ name: constraintName, columns: cols });
+    }
+  }
+  if (multiColUniques.length > 0) {
+    schema.unique_constraints = multiColUniques;
   }
 
   // Introspect triggers
@@ -389,6 +447,26 @@ export async function introspectTable(
   const policies = await getTablePolicies(client, tableName, pgSchema);
   if (policies.length > 0) {
     schema.policies = policies;
+  }
+
+  // Introspect indexes — exclude constraint-backing indexes using semantic metadata
+  const dbIndexes = await getTableIndexes(client, tableName, pgSchema);
+  const standaloneIndexes = dbIndexes.filter((i) => !i.constraint_type);
+  const indexes = standaloneIndexes.map((i) => parseIndexDef(i.indexdef, tableName));
+  if (indexes.length > 0) {
+    schema.indexes = indexes;
+  }
+
+  // Add CHECK constraints
+  if (checkConstraints.length > 0) {
+    schema.checks = checkConstraints;
+  }
+
+  // Introspect generated columns
+  const generatedCols = await getGeneratedColumns(client, tableName, pgSchema);
+  for (const col of columns) {
+    const expr = generatedCols.get(col.name);
+    if (expr) col.generated = expr;
   }
 
   return schema;

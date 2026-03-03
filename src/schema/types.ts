@@ -19,9 +19,13 @@ export interface ColumnDef {
   default?: string;
   primary_key?: boolean;
   unique?: boolean;
+  /** Name of the single-column unique constraint */
+  unique_name?: string;
   references?: {
     table: string;
     column: string;
+    /** FK constraint name */
+    name?: string;
     on_delete?: "CASCADE" | "SET NULL" | "SET DEFAULT" | "RESTRICT" | "NO ACTION";
     on_update?: "CASCADE" | "SET NULL" | "SET DEFAULT" | "RESTRICT" | "NO ACTION";
     /** Whether the FK constraint is validated (true) or NOT VALID (false). Populated by introspection. */
@@ -57,6 +61,13 @@ export interface IndexDef {
 export interface CheckDef {
   name?: string;
   expression: string;
+  /** Constraint description/comment */
+  comment?: string;
+}
+
+export interface UniqueConstraintDef {
+  name?: string;
+  columns: string[];
   /** Constraint description/comment */
   comment?: string;
 }
@@ -130,10 +141,14 @@ export interface TableSchema {
   columns: ColumnDef[];
   /** Primary key columns (if composite; single-column PK uses column-level primary_key) */
   primary_key?: string[];
+  /** PK constraint name */
+  primary_key_name?: string;
   /** Indexes */
   indexes?: IndexDef[];
   /** Check constraints */
   checks?: CheckDef[];
+  /** Multi-column unique constraints */
+  unique_constraints?: UniqueConstraintDef[];
   /** Triggers */
   triggers?: TriggerDef[];
   /** Mixin names to apply */

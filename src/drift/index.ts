@@ -4,7 +4,7 @@
 import pg from "pg";
 import path from "node:path";
 import type { SchemaFlowConfig } from "../core/config.js";
-import type { TableSchema, ColumnDef, EnumSchema, ViewSchema, MaterializedViewSchema } from "../schema/types.js";
+import type { TableSchema, ColumnDef, EnumSchema, ViewSchema, MaterializedViewSchema, UniqueConstraintDef } from "../schema/types.js";
 import { parseTableFile, parseFunctionFile, parseEnumFile, parseExtensionsFile, parseViewFile, parseMaterializedViewFile } from "../schema/parser.js";
 import { loadMixins, expandMixins } from "../schema/mixins.js";
 import { discoverSchemaFiles } from "../core/files.js";
@@ -19,6 +19,7 @@ import {
   getExistingViews,
   getExistingMaterializedViews,
   getTableIndexes,
+  getTableConstraints,
   parseIndexDefFull,
   getTableComment,
   getColumnComments,
@@ -30,6 +31,7 @@ import {
   getTriggerComments,
   getConstraintComments,
   getPolicyComments,
+  type DbIndex,
 } from "../introspect/index.js";
 import type { FunctionSchema } from "../schema/types.js";
 
@@ -148,7 +150,13 @@ export async function detectDrift(config: SchemaFlowConfig): Promise<DriftReport
 
       // Index diff
       const dbIndexes = await getTableIndexes(client, desired.table, config.pgSchema);
-      diffTableIndexes(desired, dbIndexes.map((i) => i.indexdef), items);
+      diffTableIndexes(desired, dbIndexes, items);
+
+      // Multi-column unique constraint diff
+      if (desired.unique_constraints) {
+        const dbConstraintsForUc = await getTableConstraints(client, desired.table, config.pgSchema);
+        diffUniqueConstraints(desired, dbConstraintsForUc, items);
+      }
 
       // Comment diff
       const tableComment = await getTableComment(client, desired.table, config.pgSchema);
@@ -566,6 +574,30 @@ function diffTable(desired: TableSchema, current: TableSchema, items: DriftItem[
       details.push({ field: "unique", expected: "false", actual: "true" });
     }
 
+    // Unique constraint name
+    if (col.unique && existing.unique && col.unique_name && existing.unique_name && col.unique_name !== existing.unique_name) {
+      details.push({ field: "unique_name", expected: col.unique_name, actual: existing.unique_name });
+    }
+
+    // FK constraint name
+    if (col.references && existing.references && col.references.name && existing.references.name && col.references.name !== existing.references.name) {
+      details.push({ field: "fk_name", expected: col.references.name, actual: existing.references.name });
+    }
+
+    // FK deferrable
+    if (col.references && existing.references) {
+      const desiredDeferrable = col.references.deferrable === true;
+      const existingDeferrable = existing.references.deferrable === true;
+      if (desiredDeferrable !== existingDeferrable) {
+        details.push({ field: "deferrable", expected: String(desiredDeferrable), actual: String(existingDeferrable) });
+      }
+      const desiredDeferred = col.references.initially_deferred === true;
+      const existingDeferred = existing.references.initially_deferred === true;
+      if (desiredDeferred !== existingDeferred) {
+        details.push({ field: "initially_deferred", expected: String(desiredDeferred), actual: String(existingDeferred) });
+      }
+    }
+
     if (details.length > 0) {
       items.push({
         category: "column",
@@ -576,6 +608,18 @@ function diffTable(desired: TableSchema, current: TableSchema, items: DriftItem[
         details,
       });
     }
+  }
+
+  // PK constraint name comparison
+  if (desired.primary_key_name && current.primary_key_name && desired.primary_key_name !== current.primary_key_name) {
+    items.push({
+      category: "constraint",
+      direction: "mismatch",
+      table: tableName,
+      name: "primary_key",
+      description: `PK constraint name on "${tableName}" differs`,
+      details: [{ field: "primary_key_name", expected: desired.primary_key_name, actual: current.primary_key_name }],
+    });
   }
 
   // Trigger diff
@@ -647,14 +691,14 @@ function diffTable(desired: TableSchema, current: TableSchema, items: DriftItem[
   }
 }
 
-function diffTableIndexes(desired: TableSchema, existingIndexDefs: string[], items: DriftItem[]): void {
+function diffTableIndexes(desired: TableSchema, dbIndexes: DbIndex[], items: DriftItem[]): void {
   const tableName = desired.table;
   const desiredIndexes = desired.indexes || [];
 
-  // Parse existing indexes
-  const existing = existingIndexDefs
-    .map((def) => parseIndexDefFull(def))
-    .filter((i) => !i.name.endsWith("_pkey") && !i.name.startsWith("uq_"));
+  // Filter out constraint-backing indexes using semantic metadata
+  const existing = dbIndexes
+    .filter((i) => !i.constraint_type)
+    .map((i) => parseIndexDefFull(i.indexdef));
 
   const existingByName = new Map(existing.map((i) => [i.name, i]));
   const desiredByName = new Map<string, unknown>();
@@ -685,6 +729,60 @@ function diffTableIndexes(desired: TableSchema, existingIndexDefs: string[], ite
         table: tableName,
         name,
         description: `Index "${name}" on "${tableName}" defined in YAML but not in database`,
+      });
+    }
+  }
+}
+
+function diffUniqueConstraints(
+  desired: TableSchema,
+  dbConstraints: { constraint_name: string; constraint_type: string; column_name: string }[],
+  items: DriftItem[],
+): void {
+  const tableName = desired.table;
+  const desiredUcs = desired.unique_constraints || [];
+
+  // Build map of existing multi-column unique constraints from DB
+  const existingUcMap = new Map<string, string[]>();
+  for (const c of dbConstraints) {
+    if (c.constraint_type === "UNIQUE") {
+      if (!existingUcMap.has(c.constraint_name)) existingUcMap.set(c.constraint_name, []);
+      existingUcMap.get(c.constraint_name)!.push(c.column_name);
+    }
+  }
+  // Only keep multi-column unique constraints
+  for (const [name, cols] of existingUcMap) {
+    if (cols.length <= 1) existingUcMap.delete(name);
+  }
+
+  const desiredByName = new Map<string, UniqueConstraintDef>();
+  for (const uc of desiredUcs) {
+    const name = uc.name || `uq_${tableName}_${uc.columns.join("_")}`;
+    desiredByName.set(name, uc);
+  }
+
+  // Extra in DB
+  for (const [name] of existingUcMap) {
+    if (!desiredByName.has(name)) {
+      items.push({
+        category: "constraint",
+        direction: "extra_in_db",
+        table: tableName,
+        name,
+        description: `Unique constraint "${name}" on "${tableName}" exists in database but not in YAML`,
+      });
+    }
+  }
+
+  // Missing from DB
+  for (const [name] of desiredByName) {
+    if (!existingUcMap.has(name)) {
+      items.push({
+        category: "constraint",
+        direction: "missing_from_db",
+        table: tableName,
+        name,
+        description: `Unique constraint "${name}" on "${tableName}" defined in YAML but not in database`,
       });
     }
   }

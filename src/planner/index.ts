@@ -3,8 +3,8 @@
 // Key design: CREATE TABLEs first (without FKs), then ALTER TABLEs for FKs last
 // Safety: destructive operations (drops, narrowing changes) are blocked by default
 
-import type { TableSchema, ColumnDef, IndexDef, CheckDef, TriggerDef, PolicyDef, EnumSchema, ExtensionsSchema, ViewSchema, MaterializedViewSchema } from "../schema/types.js";
-import { introspectTable, getExistingTables, getTableConstraints, getExistingEnums, getExistingExtensions, getExistingViews, getExistingMaterializedViews, getTableIndexes, parseIndexDefFull, getTableComment, getColumnComments, getGeneratedColumns, getEnumComment, getViewComment, getMaterializedViewComment, getIndexComments, getTriggerComments, getConstraintComments, getPolicyComments, type ParsedIndex } from "../introspect/index.js";
+import type { TableSchema, ColumnDef, IndexDef, CheckDef, TriggerDef, PolicyDef, EnumSchema, ExtensionsSchema, ViewSchema, MaterializedViewSchema, UniqueConstraintDef } from "../schema/types.js";
+import { introspectTable, getExistingTables, getTableConstraints, getExistingEnums, getExistingExtensions, getExistingViews, getExistingMaterializedViews, getTableIndexes, parseIndexDefFull, getTableComment, getColumnComments, getGeneratedColumns, getEnumComment, getViewComment, getMaterializedViewComment, getIndexComments, getTriggerComments, getConstraintComments, getPolicyComments, type ParsedIndex, type DbIndex } from "../introspect/index.js";
 import { logger } from "../core/logger.js";
 import pg from "pg";
 
@@ -225,8 +225,20 @@ function planCreateTable(schema: TableSchema, pgSchema: string): Operation[] {
     if (col.generated) {
       def += ` GENERATED ALWAYS AS (${col.generated}) STORED`;
     } else {
-      if (col.primary_key) def += " PRIMARY KEY";
-      if (col.unique) def += " UNIQUE";
+      if (col.primary_key) {
+        if (schema.primary_key_name) {
+          def += ` CONSTRAINT "${schema.primary_key_name}" PRIMARY KEY`;
+        } else {
+          def += " PRIMARY KEY";
+        }
+      }
+      if (col.unique) {
+        if (col.unique_name) {
+          def += ` CONSTRAINT "${col.unique_name}" UNIQUE`;
+        } else {
+          def += " UNIQUE";
+        }
+      }
       if (col.nullable === false || col.primary_key) {
         if (!col.primary_key) def += " NOT NULL";
       } else if (col.nullable === true) {
@@ -241,7 +253,7 @@ function planCreateTable(schema: TableSchema, pgSchema: string): Operation[] {
 
     // Collect foreign keys for deferred application (NOT VALID + VALIDATE two-step)
     if (col.references) {
-      const fkName = `fk_${schema.table}_${col.name}_${col.references.table}`;
+      const fkName = col.references.name || `fk_${schema.table}_${col.name}_${col.references.table}`;
       const onDelete = col.references.on_delete || "NO ACTION";
       const onUpdate = col.references.on_update || "NO ACTION";
       const deferrable = col.references.deferrable ? " DEFERRABLE" : "";
@@ -268,7 +280,23 @@ function planCreateTable(schema: TableSchema, pgSchema: string): Operation[] {
   // Composite primary key
   if (schema.primary_key && schema.primary_key.length > 0) {
     const pkCols = schema.primary_key.map((c) => `"${c}"`).join(", ");
-    colDefs.push(`  PRIMARY KEY (${pkCols})`);
+    if (schema.primary_key_name) {
+      colDefs.push(`  CONSTRAINT "${schema.primary_key_name}" PRIMARY KEY (${pkCols})`);
+    } else {
+      colDefs.push(`  PRIMARY KEY (${pkCols})`);
+    }
+  }
+
+  // Multi-column unique constraints
+  if (schema.unique_constraints) {
+    for (const uc of schema.unique_constraints) {
+      const ucCols = uc.columns.map((c) => `"${c}"`).join(", ");
+      if (uc.name) {
+        colDefs.push(`  CONSTRAINT "${uc.name}" UNIQUE (${ucCols})`);
+      } else {
+        colDefs.push(`  UNIQUE (${ucCols})`);
+      }
+    }
   }
 
   const createSql = `CREATE TABLE "${pgSchema}"."${schema.table}" (\n${colDefs.join(",\n")}\n);`;
@@ -396,7 +424,7 @@ async function planAlterTable(client: pg.PoolClient, desired: TableSchema, pgSch
 
       // FK for new column (NOT VALID + VALIDATE two-step)
       if (col.references) {
-        const fkName = `fk_${desired.table}_${col.name}_${col.references.table}`;
+        const fkName = col.references.name || `fk_${desired.table}_${col.name}_${col.references.table}`;
         const onDelete = col.references.on_delete || "NO ACTION";
         const onUpdate = col.references.on_update || "NO ACTION";
         const deferrable = col.references.deferrable ? " DEFERRABLE" : "";
@@ -421,8 +449,8 @@ async function planAlterTable(client: pg.PoolClient, desired: TableSchema, pgSch
 
       // Safe UNIQUE for new column on existing table
       if (col.unique) {
+        const constraintName = col.unique_name || `uq_${desired.table}_${col.name}`;
         const idxName = `idx_${desired.table}_${col.name}_unique`;
-        const constraintName = `uq_${desired.table}_${col.name}`;
         ops.push({
           type: "add_unique_index",
           table: desired.table,
@@ -451,7 +479,7 @@ async function planAlterTable(client: pg.PoolClient, desired: TableSchema, pgSch
 
     // Handle FK diff for existing columns
     if (col.references) {
-      const fkName = `fk_${desired.table}_${col.name}_${col.references.table}`;
+      const fkName = col.references.name || `fk_${desired.table}_${col.name}_${col.references.table}`;
       const existingFk = existingFkMap.get(fkName);
       if (existingFk) {
         // FK exists — if not validated, emit only VALIDATE
@@ -528,6 +556,12 @@ async function planAlterTable(client: pg.PoolClient, desired: TableSchema, pgSch
   // Index diff
   const indexOps = await planIndexDiff(client, desired.table, desired.indexes || [], pgSchema);
   ops.push(...indexOps);
+
+  // Multi-column unique constraint diff
+  if (desired.unique_constraints) {
+    const ucOps = await planUniqueConstraintDiff(client, desired.table, desired.unique_constraints, pgSchema);
+    ops.push(...ucOps);
+  }
 
   // Comment diff
   const currentTableComment = await getTableComment(client, desired.table, pgSchema);
@@ -643,8 +677,8 @@ function planAlterColumn(
   // Unique change for existing columns
   if (desired.unique && !existing.unique) {
     // Safe UNIQUE via concurrent index
+    const constraintName = desired.unique_name || `uq_${tableName}_${desired.name}`;
     const idxName = `idx_${tableName}_${desired.name}_unique`;
-    const constraintName = `uq_${tableName}_${desired.name}`;
     ops.push({
       type: "add_unique_index",
       table: tableName,
@@ -1320,17 +1354,12 @@ async function planIndexDiff(
   const ops: Operation[] = [];
   const dbIndexes = await getTableIndexes(client, tableName, pgSchema);
 
-  // Parse existing indexes into structured form
-  const existingParsed: ParsedIndex[] = dbIndexes.map((i) => parseIndexDefFull(i.indexdef));
-
-  // Skip PK indexes and constraint-backing indexes
-  // PK indexes typically have names like tablename_pkey
-  const existingFiltered = existingParsed.filter(
-    (i) => !i.name.endsWith("_pkey") && !i.name.startsWith("uq_"),
-  );
+  // Filter out constraint-backing indexes using semantic metadata from pg_constraint
+  const standaloneIndexes = dbIndexes.filter((i) => !i.constraint_type);
+  const existingParsed: ParsedIndex[] = standaloneIndexes.map((i) => parseIndexDefFull(i.indexdef));
 
   // Build maps by name
-  const existingByName = new Map(existingFiltered.map((i) => [i.name, i]));
+  const existingByName = new Map(existingParsed.map((i) => [i.name, i]));
   const desiredByName = new Map<string, IndexDef>();
   for (const idx of desiredIndexes) {
     const name = idx.name || `idx_${tableName}_${idx.columns.join("_")}`;
@@ -1378,6 +1407,52 @@ async function planIndexDiff(
         destructive: true,
       });
     }
+  }
+
+  return ops;
+}
+
+async function planUniqueConstraintDiff(
+  client: pg.PoolClient,
+  tableName: string,
+  desiredConstraints: UniqueConstraintDef[],
+  pgSchema: string,
+): Promise<Operation[]> {
+  const ops: Operation[] = [];
+
+  // Get existing unique constraints from pg_constraint
+  const dbConstraints = await getTableConstraints(client, tableName, pgSchema);
+  const existingUniqueMap = new Map<string, string[]>();
+  for (const c of dbConstraints) {
+    if (c.constraint_type === "UNIQUE") {
+      if (!existingUniqueMap.has(c.constraint_name)) existingUniqueMap.set(c.constraint_name, []);
+      existingUniqueMap.get(c.constraint_name)!.push(c.column_name);
+    }
+  }
+
+  for (const uc of desiredConstraints) {
+    const constraintName = uc.name || `uq_${tableName}_${uc.columns.join("_")}`;
+    if (existingUniqueMap.has(constraintName)) continue;
+
+    // Use concurrent index pattern for safe addition
+    const ucCols = uc.columns.map((c) => `"${c}"`).join(", ");
+    const idxName = `idx_${tableName}_${uc.columns.join("_")}_unique`;
+    ops.push({
+      type: "add_unique_index",
+      table: tableName,
+      sql: `CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS "${idxName}" ON "${pgSchema}"."${tableName}" (${ucCols});`,
+      description: `Create unique index ${idxName} on ${tableName}(${uc.columns.join(", ")})`,
+      phase: "structure",
+      destructive: false,
+    });
+    ops.push({
+      type: "alter_column",
+      table: tableName,
+      sql: `ALTER TABLE "${pgSchema}"."${tableName}" ADD CONSTRAINT "${constraintName}" UNIQUE USING INDEX "${idxName}";`,
+      description: `Add unique constraint ${constraintName} on ${tableName}`,
+      phase: "validate",
+      destructive: false,
+    });
   }
 
   return ops;

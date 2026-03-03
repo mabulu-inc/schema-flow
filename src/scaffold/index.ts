@@ -230,20 +230,25 @@ function tableSchemaToYaml(schema: TableSchema): string {
       if (col.primary_key) colObj.primary_key = true;
       if (col.nullable === true) colObj.nullable = true;
       if (col.unique) colObj.unique = true;
+      if (col.unique_name) colObj.unique_name = col.unique_name;
       if (col.default !== undefined) colObj.default = col.default;
       if (col.generated) colObj.generated = col.generated;
       if (col.comment) colObj.comment = col.comment;
       if (col.references) {
-        colObj.references = {
+        const refsObj: Record<string, unknown> = {
           table: col.references.table,
           column: col.references.column,
         };
+        if (col.references.name) refsObj.name = col.references.name;
         if (col.references.on_delete && col.references.on_delete !== "NO ACTION") {
-          (colObj.references as Record<string, string>).on_delete = col.references.on_delete;
+          refsObj.on_delete = col.references.on_delete;
         }
         if (col.references.on_update && col.references.on_update !== "NO ACTION") {
-          (colObj.references as Record<string, string>).on_update = col.references.on_update;
+          refsObj.on_update = col.references.on_update;
         }
+        if (col.references.deferrable) refsObj.deferrable = true;
+        if (col.references.initially_deferred) refsObj.initially_deferred = true;
+        colObj.references = refsObj;
       }
 
       return colObj;
@@ -253,12 +258,40 @@ function tableSchemaToYaml(schema: TableSchema): string {
     obj.primary_key = schema.primary_key;
   }
 
+  if (schema.primary_key_name) {
+    obj.primary_key_name = schema.primary_key_name;
+  }
+
   if (schema.indexes && schema.indexes.length > 0) {
-    obj.indexes = schema.indexes;
+    obj.indexes = schema.indexes.map((idx) => {
+      const idxObj: Record<string, unknown> = { columns: idx.columns };
+      if (idx.name) idxObj.name = idx.name;
+      if (idx.unique) idxObj.unique = true;
+      if (idx.method && idx.method !== "btree") idxObj.method = idx.method;
+      if (idx.where) idxObj.where = idx.where;
+      if (idx.include) idxObj.include = idx.include;
+      if (idx.opclass) idxObj.opclass = idx.opclass;
+      if (idx.comment) idxObj.comment = idx.comment;
+      return idxObj;
+    });
+  }
+
+  if (schema.unique_constraints && schema.unique_constraints.length > 0) {
+    obj.unique_constraints = schema.unique_constraints.map((uc) => {
+      const ucObj: Record<string, unknown> = { columns: uc.columns };
+      if (uc.name) ucObj.name = uc.name;
+      if (uc.comment) ucObj.comment = uc.comment;
+      return ucObj;
+    });
   }
 
   if (schema.checks && schema.checks.length > 0) {
-    obj.checks = schema.checks;
+    obj.checks = schema.checks.map((ch) => {
+      const chObj: Record<string, unknown> = { expression: ch.expression };
+      if (ch.name) chObj.name = ch.name;
+      if (ch.comment) chObj.comment = ch.comment;
+      return chObj;
+    });
   }
 
   if (schema.triggers && schema.triggers.length > 0) {
