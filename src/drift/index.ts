@@ -1,10 +1,9 @@
 // src/drift/index.ts
 // Drift detection: compare live DB state vs. YAML schema definitions
 
-import pg from "pg";
 import path from "node:path";
 import type { SchemaFlowConfig } from "../core/config.js";
-import type { TableSchema, ColumnDef, EnumSchema, ViewSchema, MaterializedViewSchema, UniqueConstraintDef } from "../schema/types.js";
+import type { TableSchema, EnumSchema, ViewSchema, MaterializedViewSchema, UniqueConstraintDef } from "../schema/types.js";
 import { parseTableFile, parseFunctionFile, parseEnumFile, parseExtensionsFile, parseViewFile, parseMaterializedViewFile } from "../schema/parser.js";
 import { loadMixins, expandMixins } from "../schema/mixins.js";
 import { discoverSchemaFiles } from "../core/files.js";

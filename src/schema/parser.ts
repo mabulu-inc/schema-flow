@@ -4,7 +4,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { parse as parseYaml } from "yaml";
-import type { TableSchema, FunctionSchema, ColumnDef, TriggerDef, PolicyDef, MixinSchema, PrecheckDef, ExpandDef, EnumSchema, ExtensionsSchema, ViewSchema, MaterializedViewSchema, UniqueConstraintDef } from "./types.js";
+import type { TableSchema, FunctionSchema, ColumnDef, TriggerDef, PolicyDef, MixinSchema, PrecheckDef, EnumSchema, ExtensionsSchema, ViewSchema, MaterializedViewSchema, UniqueConstraintDef } from "./types.js";
 import { logger } from "../core/logger.js";
 
 /** Parse a single column definition from raw YAML */

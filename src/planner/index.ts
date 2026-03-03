@@ -4,7 +4,7 @@
 // Safety: destructive operations (drops, narrowing changes) are blocked by default
 
 import type { TableSchema, ColumnDef, IndexDef, CheckDef, TriggerDef, PolicyDef, EnumSchema, ExtensionsSchema, ViewSchema, MaterializedViewSchema, UniqueConstraintDef } from "../schema/types.js";
-import { introspectTable, getExistingTables, getTableConstraints, getExistingEnums, getExistingExtensions, getExistingViews, getExistingMaterializedViews, getTableIndexes, parseIndexDefFull, getTableComment, getColumnComments, getGeneratedColumns, getEnumComment, getViewComment, getMaterializedViewComment, getIndexComments, getTriggerComments, getConstraintComments, getPolicyComments, type ParsedIndex, type DbIndex } from "../introspect/index.js";
+import { introspectTable, getExistingTables, getTableConstraints, getExistingEnums, getExistingExtensions, getExistingViews, getExistingMaterializedViews, getTableIndexes, parseIndexDefFull, getTableComment, getColumnComments, getEnumComment, getViewComment, getMaterializedViewComment, getIndexComments, getTriggerComments, getConstraintComments, getPolicyComments, type ParsedIndex } from "../introspect/index.js";
 import { logger } from "../core/logger.js";
 import pg from "pg";
 
