@@ -194,12 +194,18 @@ export async function getTableRLS(
   };
 }
 
-/** Get all user tables in the schema */
+/** Get all user tables in the schema (excludes extension-owned tables like spatial_ref_sys) */
 export async function getExistingTables(client: pg.PoolClient, pgSchema: string): Promise<string[]> {
   const res = await client.query(
-    `SELECT table_name FROM information_schema.tables
-     WHERE table_schema = $1 AND table_type = 'BASE TABLE'
-     ORDER BY table_name`,
+    `SELECT t.table_name FROM information_schema.tables t
+     WHERE t.table_schema = $1 AND t.table_type = 'BASE TABLE'
+       AND NOT EXISTS (
+         SELECT 1 FROM pg_catalog.pg_class c
+         JOIN pg_catalog.pg_namespace n ON c.relnamespace = n.oid
+         JOIN pg_catalog.pg_depend d ON d.objid = c.oid AND d.deptype = 'e'
+         WHERE n.nspname = t.table_schema AND c.relname = t.table_name
+       )
+     ORDER BY t.table_name`,
     [pgSchema],
   );
   return res.rows.map((r) => r.table_name);
@@ -388,7 +394,7 @@ export async function introspectTable(
   return schema;
 }
 
-/** Get all functions in the schema */
+/** Get all user-defined functions in the schema (excludes extension-owned functions like PostGIS st_*) */
 export async function getExistingFunctions(client: pg.PoolClient, pgSchema: string): Promise<DbFunction[]> {
   const res = await client.query<DbFunction>(
     `SELECT
@@ -408,6 +414,12 @@ export async function getExistingFunctions(client: pg.PoolClient, pgSchema: stri
      WHERE r.routine_schema = $1
        AND r.routine_type = 'FUNCTION'
        AND r.routine_name NOT LIKE 'pg_%'
+       AND NOT EXISTS (
+         SELECT 1 FROM pg_catalog.pg_proc proc
+         JOIN pg_catalog.pg_namespace ns ON proc.pronamespace = ns.oid
+         JOIN pg_catalog.pg_depend dep ON dep.objid = proc.oid AND dep.deptype = 'e'
+         WHERE ns.nspname = r.routine_schema AND proc.proname = r.routine_name
+       )
      GROUP BY r.routine_name, r.routine_type, r.data_type, r.external_language, r.routine_definition, r.security_type
      ORDER BY r.routine_name`,
     [pgSchema],
@@ -461,10 +473,18 @@ export interface DbView {
   definition: string;
 }
 
-/** Get all views in the schema */
+/** Get all user-defined views in the schema (excludes extension-owned views like geometry_columns) */
 export async function getExistingViews(client: pg.PoolClient, pgSchema: string): Promise<ViewSchema[]> {
   const res = await client.query<DbView>(
-    `SELECT viewname, definition FROM pg_views WHERE schemaname = $1 ORDER BY viewname`,
+    `SELECT v.viewname, v.definition FROM pg_views v
+     WHERE v.schemaname = $1
+       AND NOT EXISTS (
+         SELECT 1 FROM pg_catalog.pg_class c
+         JOIN pg_catalog.pg_namespace n ON c.relnamespace = n.oid
+         JOIN pg_catalog.pg_depend d ON d.objid = c.oid AND d.deptype = 'e'
+         WHERE n.nspname = v.schemaname AND c.relname = v.viewname
+       )
+     ORDER BY v.viewname`,
     [pgSchema],
   );
   return res.rows.map((r) => ({
@@ -480,10 +500,18 @@ export interface DbMatView {
   definition: string;
 }
 
-/** Get all materialized views in the schema */
+/** Get all user-defined materialized views in the schema (excludes extension-owned) */
 export async function getExistingMaterializedViews(client: pg.PoolClient, pgSchema: string): Promise<MaterializedViewSchema[]> {
   const res = await client.query<DbMatView>(
-    `SELECT matviewname, definition FROM pg_matviews WHERE schemaname = $1 ORDER BY matviewname`,
+    `SELECT mv.matviewname, mv.definition FROM pg_matviews mv
+     WHERE mv.schemaname = $1
+       AND NOT EXISTS (
+         SELECT 1 FROM pg_catalog.pg_class c
+         JOIN pg_catalog.pg_namespace n ON c.relnamespace = n.oid
+         JOIN pg_catalog.pg_depend d ON d.objid = c.oid AND d.deptype = 'e'
+         WHERE n.nspname = mv.schemaname AND c.relname = mv.matviewname
+       )
+     ORDER BY mv.matviewname`,
     [pgSchema],
   );
 

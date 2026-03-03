@@ -1,6 +1,6 @@
 {
   "name": "@mabulu-inc/schema-flow",
-  "version": "1.0.2",
+  "version": "1.0.3",
   "description": "Declarative zero-downtime PostgreSQL migrations. Flows your schema from current state to desired state via YAML-driven table definitions and procedural pre/post scripts.",
   "license": "MIT",
   "type": "module",
