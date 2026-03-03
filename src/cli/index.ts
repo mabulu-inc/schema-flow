@@ -8,7 +8,8 @@ import { loadConfigFile, resolveEnvironmentConfig } from "../core/config-file.js
 import { logger, LogLevel } from "../core/logger.js";
 import { testConnection, closePool } from "../core/db.js";
 import { runAll, runPre, runMigrate, runPost, runValidate, runBaseline } from "../executor/index.js";
-import { scaffoldPre, scaffoldPost, generateFromDb, scaffoldInit } from "../scaffold/index.js";
+import { scaffoldPre, scaffoldPost, generateFromDb, scaffoldInit, scaffoldMixin } from "../scaffold/index.js";
+import { printDocsReference } from "../docs/index.js";
 
 const require = createRequire(import.meta.url);
 const { version } = require("../../package.json") as { version: string };
@@ -109,7 +110,9 @@ function printHelp(): void {
     ${"\x1b[36m"}baseline${"\x1b[0m"}            Mark existing database as managed without running migrations
     ${"\x1b[36m"}new pre <name>${"\x1b[0m"}      Scaffold a new pre-migration script
     ${"\x1b[36m"}new post <name>${"\x1b[0m"}     Scaffold a new post-migration script
+    ${"\x1b[36m"}new mixin <name>${"\x1b[0m"}    Scaffold a new mixin YAML file
     ${"\x1b[36m"}init${"\x1b[0m"}               Initialize directory structure (schema/, pre/, post/, repeatable/)
+    ${"\x1b[36m"}docs${"\x1b[0m"}               Print YAML format reference
     ${"\x1b[36m"}status${"\x1b[0m"}              Show migration status and pending changes
     ${"\x1b[36m"}help${"\x1b[0m"}               Show this help message
 
@@ -322,10 +325,22 @@ async function main(): Promise<void> {
     } else if (args.subcommand === "post") {
       const name = args.name || "migration";
       scaffoldPost(minimalConfig, name);
+    } else if (args.subcommand === "mixin") {
+      if (!args.name || args.name === "mixin") {
+        logger.error("Usage: schema-flow new mixin <name>");
+        process.exit(1);
+      }
+      scaffoldMixin(minimalConfig, args.name);
     } else {
-      logger.error("Usage: schema-flow new <pre|post> <name>");
+      logger.error("Usage: schema-flow new <pre|post|mixin> <name>");
       process.exit(1);
     }
+    process.exit(0);
+  }
+
+  // Docs command doesn't need a database connection
+  if (args.command === "docs") {
+    printDocsReference();
     process.exit(0);
   }
 

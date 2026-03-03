@@ -27,7 +27,7 @@ export type {
 export { loadMixins, expandMixins } from "./schema/mixins.js";
 export { buildPlan, normalizeType, type MigrationPlan, type Operation, type PlanOptions } from "./planner/index.js";
 export { runAll, runPre, runMigrate, runPost, runValidate, runBaseline, runRepeatables, type ExecutionResult, type Phase, type BaselineResult, type RepeatableResult } from "./executor/index.js";
-export { scaffoldPre, scaffoldPost, generateFromDb, scaffoldInit } from "./scaffold/index.js";
+export { scaffoldPre, scaffoldPost, generateFromDb, scaffoldInit, scaffoldMixin } from "./scaffold/index.js";
 export {
   introspectTable,
   getExistingTables,
