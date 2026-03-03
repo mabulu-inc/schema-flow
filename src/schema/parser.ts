@@ -69,6 +69,7 @@ export function parseTriggerDef(trigger: Record<string, unknown>, filePath: stri
     function: trigger.function as string,
     for_each: (trigger.for_each as TriggerDef["for_each"]) || "ROW",
     when: trigger.when !== undefined ? String(trigger.when) : undefined,
+    comment: trigger.comment !== undefined ? String(trigger.comment) : undefined,
   };
 }
 
@@ -106,6 +107,7 @@ export function parsePolicyDef(policy: Record<string, unknown>, filePath: string
     using: policy.using !== undefined ? String(policy.using) : undefined,
     check: policy.check !== undefined ? String(policy.check) : undefined,
     permissive: policy.permissive !== undefined ? Boolean(policy.permissive) : true,
+    comment: policy.comment !== undefined ? String(policy.comment) : undefined,
   };
 }
 
@@ -243,10 +245,12 @@ export function parseEnumFile(filePath: string): EnumSchema {
     throw new Error(`Enum file ${filePath} must define "values" as a non-empty array`);
   }
 
-  return {
+  const result: EnumSchema = {
     name: String(raw.enum),
     values: raw.values.map(String),
   };
+  if (raw.comment) result.comment = String(raw.comment);
+  return result;
 }
 
 export function parseExtensionsFile(filePath: string): ExtensionsSchema {
@@ -278,10 +282,12 @@ export function parseViewFile(filePath: string): ViewSchema {
     throw new Error(`View file ${filePath} must define "query"`);
   }
 
-  return {
+  const result: ViewSchema = {
     name: String(raw.view),
     query: String(raw.query),
   };
+  if (raw.comment) result.comment = String(raw.comment);
+  return result;
 }
 
 export function parseMaterializedViewFile(filePath: string): MaterializedViewSchema {
@@ -304,6 +310,8 @@ export function parseMaterializedViewFile(filePath: string): MaterializedViewSch
   if (raw.indexes && Array.isArray(raw.indexes)) {
     mv.indexes = raw.indexes;
   }
+
+  if (raw.comment) mv.comment = String(raw.comment);
 
   return mv;
 }
@@ -334,6 +342,8 @@ export function parseFunctionFile(filePath: string): FunctionSchema {
       fn.security = sec;
     }
   }
+
+  if (raw.comment) fn.comment = String(raw.comment);
 
   return fn;
 }

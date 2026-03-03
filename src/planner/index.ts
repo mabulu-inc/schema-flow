@@ -4,7 +4,7 @@
 // Safety: destructive operations (drops, narrowing changes) are blocked by default
 
 import type { TableSchema, ColumnDef, IndexDef, CheckDef, TriggerDef, PolicyDef, EnumSchema, ExtensionsSchema, ViewSchema, MaterializedViewSchema } from "../schema/types.js";
-import { introspectTable, getExistingTables, getTableConstraints, getExistingEnums, getExistingExtensions, getExistingViews, getExistingMaterializedViews, getTableIndexes, parseIndexDefFull, getTableComment, getColumnComments, getGeneratedColumns, type ParsedIndex } from "../introspect/index.js";
+import { introspectTable, getExistingTables, getTableConstraints, getExistingEnums, getExistingExtensions, getExistingViews, getExistingMaterializedViews, getTableIndexes, parseIndexDefFull, getTableComment, getColumnComments, getGeneratedColumns, getEnumComment, getViewComment, getMaterializedViewComment, getIndexComments, getTriggerComments, getConstraintComments, getPolicyComments, type ParsedIndex } from "../introspect/index.js";
 import { logger } from "../core/logger.js";
 import pg from "pg";
 
@@ -323,6 +323,26 @@ function planCreateTable(schema: TableSchema, pgSchema: string): Operation[] {
     }
   }
 
+  // Comments for new table objects (table, columns, triggers, checks, policies)
+  const commentOps = planTableComments(
+    schema.table,
+    schema,
+    pgSchema,
+    null,
+    new Map(),
+    new Map(),
+    new Map(),
+    new Map(),
+    new Map(),
+  );
+  // Index comments must run in validate phase (after CONCURRENTLY index creation)
+  for (const op of commentOps) {
+    if (op.sql.includes("COMMENT ON INDEX")) {
+      op.phase = "validate";
+    }
+  }
+  ops.push(...commentOps);
+
   // FK ops come last
   ops.push(...fkOps);
 
@@ -512,7 +532,17 @@ async function planAlterTable(client: pg.PoolClient, desired: TableSchema, pgSch
   // Comment diff
   const currentTableComment = await getTableComment(client, desired.table, pgSchema);
   const currentColumnComments = await getColumnComments(client, desired.table, pgSchema);
-  const commentOps = planTableComments(desired.table, desired, pgSchema, currentTableComment, currentColumnComments);
+  const currentIndexComments = await getIndexComments(client, desired.table, pgSchema);
+  const currentTriggerComments = await getTriggerComments(client, desired.table, pgSchema);
+  const currentConstraintComments = await getConstraintComments(client, desired.table, pgSchema);
+  const currentPolicyComments = await getPolicyComments(client, desired.table, pgSchema);
+  const commentOps = planTableComments(desired.table, desired, pgSchema, currentTableComment, currentColumnComments, currentIndexComments, currentTriggerComments, currentConstraintComments, currentPolicyComments);
+  // Index comments must run in validate phase (after CONCURRENTLY index creation)
+  for (const op of commentOps) {
+    if (op.sql.includes("COMMENT ON INDEX")) {
+      op.phase = "validate";
+    }
+  }
   ops.push(...commentOps);
 
   return ops;
@@ -1085,6 +1115,20 @@ async function planEnums(
         }
       }
     }
+
+    // Enum comment
+    if (desired.comment !== undefined) {
+      const currentComment = await getEnumComment(client, desired.name, pgSchema);
+      if (desired.comment !== currentComment) {
+        ops.push({
+          type: "set_comment",
+          sql: `COMMENT ON TYPE "${pgSchema}"."${desired.name}" IS '${desired.comment.replace(/'/g, "''")}';`,
+          description: `Set comment on enum ${desired.name}`,
+          phase: "structure",
+          destructive: false,
+        });
+      }
+    }
   }
 
   return ops;
@@ -1145,6 +1189,20 @@ async function planViews(
           type: "create_view",
           sql: `CREATE OR REPLACE VIEW "${pgSchema}"."${desired.name}" AS ${desired.query};`,
           description: `Update view ${desired.name}`,
+          phase: "structure",
+          destructive: false,
+        });
+      }
+    }
+
+    // View comment
+    if (desired.comment !== undefined) {
+      const currentComment = await getViewComment(client, desired.name, pgSchema);
+      if (desired.comment !== currentComment) {
+        ops.push({
+          type: "set_comment",
+          sql: `COMMENT ON VIEW "${pgSchema}"."${desired.name}" IS '${desired.comment.replace(/'/g, "''")}';`,
+          description: `Set comment on view ${desired.name}`,
           phase: "structure",
           destructive: false,
         });
@@ -1230,6 +1288,20 @@ async function planMaterializedViews(
             });
           }
         }
+      }
+    }
+
+    // Materialized view comment
+    if (desired.comment !== undefined) {
+      const currentComment = await getMaterializedViewComment(client, desired.name, pgSchema);
+      if (desired.comment !== currentComment) {
+        ops.push({
+          type: "set_comment",
+          sql: `COMMENT ON MATERIALIZED VIEW "${pgSchema}"."${desired.name}" IS '${desired.comment.replace(/'/g, "''")}';`,
+          description: `Set comment on materialized view ${desired.name}`,
+          phase: "structure",
+          destructive: false,
+        });
       }
     }
   }
@@ -1327,6 +1399,10 @@ export function planTableComments(
   pgSchema: string,
   currentTableComment: string | null,
   currentColumnComments: Map<string, string>,
+  currentIndexComments?: Map<string, string>,
+  currentTriggerComments?: Map<string, string>,
+  currentConstraintComments?: Map<string, string>,
+  currentPolicyComments?: Map<string, string>,
 ): Operation[] {
   const ops: Operation[] = [];
   const qualifiedTable = `"${pgSchema}"."${tableName}"`;
@@ -1356,6 +1432,84 @@ export function planTableComments(
           phase: "structure",
           destructive: false,
         });
+      }
+    }
+  }
+
+  // Index comments
+  if (desired.indexes && currentIndexComments) {
+    for (const idx of desired.indexes) {
+      if (idx.comment !== undefined) {
+        const idxName = idx.name || `idx_${tableName}_${idx.columns.join("_")}`;
+        const currentComment = currentIndexComments.get(idxName) || null;
+        if (idx.comment !== currentComment) {
+          ops.push({
+            type: "set_comment",
+            table: tableName,
+            sql: `COMMENT ON INDEX "${pgSchema}"."${idxName}" IS '${idx.comment.replace(/'/g, "''")}';`,
+            description: `Set comment on index ${idxName}`,
+            phase: "structure",
+            destructive: false,
+          });
+        }
+      }
+    }
+  }
+
+  // Trigger comments
+  if (desired.triggers && currentTriggerComments) {
+    for (const trigger of desired.triggers) {
+      if (trigger.comment !== undefined) {
+        const currentComment = currentTriggerComments.get(trigger.name) || null;
+        if (trigger.comment !== currentComment) {
+          ops.push({
+            type: "set_comment",
+            table: tableName,
+            sql: `COMMENT ON TRIGGER "${trigger.name}" ON ${qualifiedTable} IS '${trigger.comment.replace(/'/g, "''")}';`,
+            description: `Set comment on trigger ${trigger.name}`,
+            phase: "structure",
+            destructive: false,
+          });
+        }
+      }
+    }
+  }
+
+  // Check constraint comments
+  if (desired.checks && currentConstraintComments) {
+    for (const check of desired.checks) {
+      if (check.comment !== undefined) {
+        const checkName = check.name || `chk_${tableName}_${Date.now()}`;
+        const currentComment = currentConstraintComments.get(checkName) || null;
+        if (check.comment !== currentComment) {
+          ops.push({
+            type: "set_comment",
+            table: tableName,
+            sql: `COMMENT ON CONSTRAINT "${checkName}" ON ${qualifiedTable} IS '${check.comment.replace(/'/g, "''")}';`,
+            description: `Set comment on constraint ${checkName}`,
+            phase: "structure",
+            destructive: false,
+          });
+        }
+      }
+    }
+  }
+
+  // Policy comments
+  if (desired.policies && currentPolicyComments) {
+    for (const policy of desired.policies) {
+      if (policy.comment !== undefined) {
+        const currentComment = currentPolicyComments.get(policy.name) || null;
+        if (policy.comment !== currentComment) {
+          ops.push({
+            type: "set_comment",
+            table: tableName,
+            sql: `COMMENT ON POLICY "${policy.name}" ON ${qualifiedTable} IS '${policy.comment.replace(/'/g, "''")}';`,
+            description: `Set comment on policy ${policy.name}`,
+            phase: "structure",
+            destructive: false,
+          });
+        }
       }
     }
   }

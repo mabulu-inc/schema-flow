@@ -22,6 +22,14 @@ import {
   parseIndexDefFull,
   getTableComment,
   getColumnComments,
+  getEnumComment,
+  getViewComment,
+  getMaterializedViewComment,
+  getFunctionComment,
+  getIndexComments,
+  getTriggerComments,
+  getConstraintComments,
+  getPolicyComments,
 } from "../introspect/index.js";
 import type { FunctionSchema } from "../schema/types.js";
 
@@ -170,6 +178,79 @@ export async function detectDrift(config: SchemaFlowConfig): Promise<DriftReport
           }
         }
       }
+
+      // Index comment drift
+      const indexComments = await getIndexComments(client, desired.table, config.pgSchema);
+      for (const idx of desired.indexes || []) {
+        if (idx.comment !== undefined) {
+          const idxName = idx.name || `idx_${desired.table}_${idx.columns.join("_")}`;
+          const actual = indexComments.get(idxName) || null;
+          if (idx.comment !== actual) {
+            items.push({
+              category: "comment",
+              direction: "mismatch",
+              table: desired.table,
+              name: idxName,
+              description: `Index comment on "${idxName}" differs`,
+              details: [{ field: "comment", expected: idx.comment, actual: actual || "(none)" }],
+            });
+          }
+        }
+      }
+
+      // Trigger comment drift
+      const triggerComments = await getTriggerComments(client, desired.table, config.pgSchema);
+      for (const trigger of desired.triggers || []) {
+        if (trigger.comment !== undefined) {
+          const actual = triggerComments.get(trigger.name) || null;
+          if (trigger.comment !== actual) {
+            items.push({
+              category: "comment",
+              direction: "mismatch",
+              table: desired.table,
+              name: trigger.name,
+              description: `Trigger comment on "${trigger.name}" differs`,
+              details: [{ field: "comment", expected: trigger.comment, actual: actual || "(none)" }],
+            });
+          }
+        }
+      }
+
+      // Constraint comment drift (checks)
+      const constraintComments = await getConstraintComments(client, desired.table, config.pgSchema);
+      for (const check of desired.checks || []) {
+        if (check.comment !== undefined && check.name) {
+          const actual = constraintComments.get(check.name) || null;
+          if (check.comment !== actual) {
+            items.push({
+              category: "comment",
+              direction: "mismatch",
+              table: desired.table,
+              name: check.name,
+              description: `Constraint comment on "${check.name}" differs`,
+              details: [{ field: "comment", expected: check.comment, actual: actual || "(none)" }],
+            });
+          }
+        }
+      }
+
+      // Policy comment drift
+      const policyComments = await getPolicyComments(client, desired.table, config.pgSchema);
+      for (const policy of desired.policies || []) {
+        if (policy.comment !== undefined) {
+          const actual = policyComments.get(policy.name) || null;
+          if (policy.comment !== actual) {
+            items.push({
+              category: "comment",
+              direction: "mismatch",
+              table: desired.table,
+              name: policy.name,
+              description: `Policy comment on "${policy.name}" differs`,
+              details: [{ field: "comment", expected: policy.comment, actual: actual || "(none)" }],
+            });
+          }
+        }
+      }
     }
 
     // Diff functions
@@ -185,6 +266,17 @@ export async function detectDrift(config: SchemaFlowConfig): Promise<DriftReport
           name: fn.name,
           description: `Function "${fn.name}" defined in YAML but does not exist in database`,
         });
+      } else if (fn.comment !== undefined) {
+        const currentComment = await getFunctionComment(client, fn.name, config.pgSchema);
+        if (fn.comment !== currentComment) {
+          items.push({
+            category: "comment",
+            direction: "mismatch",
+            name: fn.name,
+            description: `Function comment on "${fn.name}" differs`,
+            details: [{ field: "comment", expected: fn.comment, actual: currentComment || "(none)" }],
+          });
+        }
       }
     }
 
@@ -228,6 +320,20 @@ export async function detectDrift(config: SchemaFlowConfig): Promise<DriftReport
               ...(extraValues.length > 0 ? [{ field: "extra_values", expected: "(not in YAML)", actual: extraValues.join(", ") }] : []),
             ],
           });
+        }
+
+        // Enum comment drift
+        if (desired.comment !== undefined) {
+          const currentComment = await getEnumComment(client, desired.name, config.pgSchema);
+          if (desired.comment !== currentComment) {
+            items.push({
+              category: "comment",
+              direction: "mismatch",
+              name: desired.name,
+              description: `Enum comment on "${desired.name}" differs`,
+              details: [{ field: "comment", expected: desired.comment, actual: currentComment || "(none)" }],
+            });
+          }
         }
       }
     }
@@ -288,6 +394,20 @@ export async function detectDrift(config: SchemaFlowConfig): Promise<DriftReport
             description: `View "${desired.name}" query differs from database`,
           });
         }
+
+        // View comment drift
+        if (desired.comment !== undefined) {
+          const currentComment = await getViewComment(client, desired.name, config.pgSchema);
+          if (desired.comment !== currentComment) {
+            items.push({
+              category: "comment",
+              direction: "mismatch",
+              name: desired.name,
+              description: `View comment on "${desired.name}" differs`,
+              details: [{ field: "comment", expected: desired.comment, actual: currentComment || "(none)" }],
+            });
+          }
+        }
       }
     }
     for (const existing of existingViews) {
@@ -323,6 +443,20 @@ export async function detectDrift(config: SchemaFlowConfig): Promise<DriftReport
             name: desired.name,
             description: `Materialized view "${desired.name}" query differs from database`,
           });
+        }
+
+        // Materialized view comment drift
+        if (desired.comment !== undefined) {
+          const currentComment = await getMaterializedViewComment(client, desired.name, config.pgSchema);
+          if (desired.comment !== currentComment) {
+            items.push({
+              category: "comment",
+              direction: "mismatch",
+              name: desired.name,
+              description: `Materialized view comment on "${desired.name}" differs`,
+              details: [{ field: "comment", expected: desired.comment, actual: currentComment || "(none)" }],
+            });
+          }
         }
       }
     }

@@ -15,6 +15,7 @@ import { FileTracker } from "../core/tracker.js";
 import { withClient, type ClientOptions } from "../core/db.js";
 import { logger } from "../core/logger.js";
 import { discoverSchemaFiles, discoverScripts } from "../core/files.js";
+import { getFunctionComment } from "../introspect/index.js";
 
 /** Derive a stable advisory lock key from the pgSchema name */
 function advisoryLockKey(pgSchema: string): string {
@@ -241,6 +242,18 @@ export async function runMigrate(config: SchemaFlowConfig): Promise<ExecutionRes
           const sql = `CREATE ${replaceClause}FUNCTION ${fn.name}${argsClause} RETURNS ${fn.returns} LANGUAGE ${fn.language}${securityClause} AS $fn_body$\n${fn.body}\n$fn_body$;`;
           logger.debug(`Creating function: ${fn.name}`);
           await client.query(sql);
+        }
+        // Apply function comments
+        for (const fn of parsedFunctions) {
+          if (fn.comment) {
+            const argsClause = fn.args ? `(${fn.args})` : "()";
+            const currentComment = await getFunctionComment(client, fn.name, config.pgSchema);
+            if (fn.comment !== currentComment) {
+              const escapedComment = fn.comment.replace(/'/g, "''");
+              await client.query(`COMMENT ON FUNCTION ${fn.name}${argsClause} IS '${escapedComment}';`);
+              logger.debug(`Set comment on function: ${fn.name}`);
+            }
+          }
         }
         await client.query("COMMIT");
         logger.info(`Applied ${parsedFunctions.length} function(s)`);

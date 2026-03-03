@@ -50,11 +50,15 @@ export interface IndexDef {
   include?: string[];
   /** Operator class (e.g., jsonb_path_ops) */
   opclass?: string;
+  /** Index description/comment */
+  comment?: string;
 }
 
 export interface CheckDef {
   name?: string;
   expression: string;
+  /** Constraint description/comment */
+  comment?: string;
 }
 
 export interface TriggerDef {
@@ -70,6 +74,8 @@ export interface TriggerDef {
   for_each: "ROW" | "STATEMENT";
   /** Optional WHEN condition */
   when?: string;
+  /** Trigger description/comment */
+  comment?: string;
 }
 
 export interface PolicyDef {
@@ -85,6 +91,8 @@ export interface PolicyDef {
   check?: string;
   /** Whether the policy is permissive (default true); false = RESTRICTIVE */
   permissive?: boolean;
+  /** Policy description/comment */
+  comment?: string;
 }
 
 export interface MixinSchema {
@@ -161,6 +169,8 @@ export interface FunctionSchema {
   replace?: boolean;
   /** Security mode: "definer" generates SECURITY DEFINER, "invoker" is the default */
   security?: "definer" | "invoker";
+  /** Function description/comment */
+  comment?: string;
 }
 
 export interface EnumSchema {
@@ -168,6 +178,8 @@ export interface EnumSchema {
   name: string;
   /** Ordered list of enum values */
   values: string[];
+  /** Enum type description/comment */
+  comment?: string;
 }
 
 export interface ExtensionsSchema {
@@ -180,6 +192,8 @@ export interface ViewSchema {
   name: string;
   /** SQL query defining the view */
   query: string;
+  /** View description/comment */
+  comment?: string;
 }
 
 export interface MaterializedViewSchema {
@@ -189,4 +203,6 @@ export interface MaterializedViewSchema {
   query: string;
   /** Indexes on the materialized view */
   indexes?: IndexDef[];
+  /** Materialized view description/comment */
+  comment?: string;
 }

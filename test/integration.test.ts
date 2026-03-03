@@ -19,6 +19,14 @@ import {
   isConstraintDeferrable,
   isConstraintInitiallyDeferred,
   fkExists,
+  getEnumComment,
+  getViewComment,
+  getFunctionComment,
+  getIndexComment,
+  getTriggerComment,
+  getConstraintComment,
+  getPolicyComment,
+  getMaterializedViewComment,
 } from "./helpers.js";
 import { resolveConfig } from "../src/core/config.js";
 import { runMigrate } from "../src/executor/index.js";
@@ -573,6 +581,253 @@ columns:
 
       expect(await getComment(ctx.connectionString, "users")).toBe("User table v2");
       expect(await getComment(ctx.connectionString, "users", "email")).toBe("Email v2");
+    });
+
+    it("applies enum comment", async () => {
+      writeSchema(
+        ctx.project.schemaDir,
+        "enum_status.yaml",
+        `enum: status
+values: [active, inactive]
+comment: "Account status type"
+`,
+      );
+
+      const config = resolveConfig({
+        connectionString: ctx.connectionString,
+        baseDir: ctx.project.baseDir,
+        dryRun: false,
+      });
+
+      const result = await runMigrate(config);
+      expect(result.success).toBe(true);
+
+      expect(await getEnumComment(ctx.connectionString, "status")).toBe("Account status type");
+    });
+
+    it("applies view comment", async () => {
+      writeSchema(
+        ctx.project.schemaDir,
+        "users.yaml",
+        `table: users
+columns:
+  - name: id
+    type: serial
+    primary_key: true
+  - name: email
+    type: text
+`,
+      );
+
+      writeSchema(
+        ctx.project.schemaDir,
+        "view_all_users.yaml",
+        `view: all_users
+query: "SELECT id, email FROM users"
+comment: "All users view"
+`,
+      );
+
+      const config = resolveConfig({
+        connectionString: ctx.connectionString,
+        baseDir: ctx.project.baseDir,
+        dryRun: false,
+      });
+
+      const result = await runMigrate(config);
+      expect(result.success).toBe(true);
+
+      expect(await getViewComment(ctx.connectionString, "all_users")).toBe("All users view");
+    });
+
+    it("applies function comment", async () => {
+      writeSchema(
+        ctx.project.schemaDir,
+        "fn_noop.yaml",
+        `name: noop
+language: plpgsql
+returns: void
+body: "BEGIN END;"
+comment: "A no-op function"
+`,
+      );
+
+      const config = resolveConfig({
+        connectionString: ctx.connectionString,
+        baseDir: ctx.project.baseDir,
+        dryRun: false,
+      });
+
+      const result = await runMigrate(config);
+      expect(result.success).toBe(true);
+
+      expect(await getFunctionComment(ctx.connectionString, "noop")).toBe("A no-op function");
+    });
+
+    it("applies index comment", async () => {
+      writeSchema(
+        ctx.project.schemaDir,
+        "users.yaml",
+        `table: users
+columns:
+  - name: id
+    type: serial
+    primary_key: true
+  - name: email
+    type: text
+indexes:
+  - columns: [email]
+    name: idx_users_email
+    comment: "Speed up email lookups"
+`,
+      );
+
+      const config = resolveConfig({
+        connectionString: ctx.connectionString,
+        baseDir: ctx.project.baseDir,
+        dryRun: false,
+      });
+
+      const result = await runMigrate(config);
+      expect(result.success).toBe(true);
+
+      expect(await getIndexComment(ctx.connectionString, "idx_users_email")).toBe("Speed up email lookups");
+    });
+
+    it("applies trigger comment", async () => {
+      writeSchema(
+        ctx.project.schemaDir,
+        "fn_noop_trigger.yaml",
+        `name: noop_trigger
+language: plpgsql
+returns: trigger
+body: "BEGIN RETURN NEW; END;"
+`,
+      );
+
+      writeSchema(
+        ctx.project.schemaDir,
+        "users.yaml",
+        `table: users
+columns:
+  - name: id
+    type: serial
+    primary_key: true
+triggers:
+  - name: trg_audit
+    timing: AFTER
+    events: [INSERT]
+    function: noop_trigger
+    comment: "Audit trail trigger"
+`,
+      );
+
+      const config = resolveConfig({
+        connectionString: ctx.connectionString,
+        baseDir: ctx.project.baseDir,
+        dryRun: false,
+      });
+
+      const result = await runMigrate(config);
+      expect(result.success).toBe(true);
+
+      expect(await getTriggerComment(ctx.connectionString, "trg_audit", "users")).toBe("Audit trail trigger");
+    });
+
+    it("applies materialized view comment", async () => {
+      writeSchema(
+        ctx.project.schemaDir,
+        "events.yaml",
+        `table: events
+columns:
+  - name: id
+    type: serial
+    primary_key: true
+  - name: created_at
+    type: timestamptz
+    default: now()
+`,
+      );
+
+      writeSchema(
+        ctx.project.schemaDir,
+        "mv_event_counts.yaml",
+        `materialized_view: event_counts
+query: "SELECT count(*) AS total FROM events"
+comment: "Cached event totals"
+`,
+      );
+
+      const config = resolveConfig({
+        connectionString: ctx.connectionString,
+        baseDir: ctx.project.baseDir,
+        dryRun: false,
+      });
+
+      const result = await runMigrate(config);
+      expect(result.success).toBe(true);
+
+      expect(await getMaterializedViewComment(ctx.connectionString, "event_counts")).toBe("Cached event totals");
+    });
+
+    it("applies check constraint comment", async () => {
+      writeSchema(
+        ctx.project.schemaDir,
+        "users.yaml",
+        `table: users
+columns:
+  - name: id
+    type: serial
+    primary_key: true
+  - name: age
+    type: integer
+checks:
+  - name: chk_age_positive
+    expression: "age > 0"
+    comment: "Age must be positive"
+`,
+      );
+
+      const config = resolveConfig({
+        connectionString: ctx.connectionString,
+        baseDir: ctx.project.baseDir,
+        dryRun: false,
+      });
+
+      const result = await runMigrate(config);
+      expect(result.success).toBe(true);
+
+      expect(await getConstraintComment(ctx.connectionString, "chk_age_positive")).toBe("Age must be positive");
+    });
+
+    it("applies policy comment", async () => {
+      writeSchema(
+        ctx.project.schemaDir,
+        "users.yaml",
+        `table: users
+rls: true
+columns:
+  - name: id
+    type: serial
+    primary_key: true
+policies:
+  - name: users_read
+    for: SELECT
+    using: "true"
+    comment: "Allow all reads"
+`,
+      );
+
+      const config = resolveConfig({
+        connectionString: ctx.connectionString,
+        baseDir: ctx.project.baseDir,
+        dryRun: false,
+      });
+
+      const result = await runMigrate(config);
+      expect(result.success).toBe(true);
+
+      expect(await getPolicyComment(ctx.connectionString, "users_read", "users")).toBe("Allow all reads");
     });
   });
 

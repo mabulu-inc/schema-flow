@@ -614,6 +614,140 @@ export async function getColumnComments(
   return map;
 }
 
+/** Get the comment on an enum type */
+export async function getEnumComment(client: pg.PoolClient, enumName: string, pgSchema: string): Promise<string | null> {
+  const res = await client.query(
+    `SELECT obj_description(t.oid, 'pg_type') AS comment
+     FROM pg_type t
+     JOIN pg_namespace n ON t.typnamespace = n.oid
+     WHERE n.nspname = $1 AND t.typname = $2`,
+    [pgSchema, enumName],
+  );
+  return res.rows.length > 0 ? res.rows[0].comment : null;
+}
+
+/** Get the comment on a view */
+export async function getViewComment(client: pg.PoolClient, viewName: string, pgSchema: string): Promise<string | null> {
+  const res = await client.query(
+    `SELECT obj_description(c.oid, 'pg_class') AS comment
+     FROM pg_class c
+     JOIN pg_namespace n ON c.relnamespace = n.oid
+     WHERE n.nspname = $1 AND c.relname = $2 AND c.relkind = 'v'`,
+    [pgSchema, viewName],
+  );
+  return res.rows.length > 0 ? res.rows[0].comment : null;
+}
+
+/** Get the comment on a materialized view */
+export async function getMaterializedViewComment(client: pg.PoolClient, mvName: string, pgSchema: string): Promise<string | null> {
+  const res = await client.query(
+    `SELECT obj_description(c.oid, 'pg_class') AS comment
+     FROM pg_class c
+     JOIN pg_namespace n ON c.relnamespace = n.oid
+     WHERE n.nspname = $1 AND c.relname = $2 AND c.relkind = 'm'`,
+    [pgSchema, mvName],
+  );
+  return res.rows.length > 0 ? res.rows[0].comment : null;
+}
+
+/** Get the comment on a function */
+export async function getFunctionComment(client: pg.PoolClient, funcName: string, pgSchema: string): Promise<string | null> {
+  const res = await client.query(
+    `SELECT obj_description(p.oid, 'pg_proc') AS comment
+     FROM pg_proc p
+     JOIN pg_namespace n ON p.pronamespace = n.oid
+     WHERE n.nspname = $1 AND p.proname = $2
+     LIMIT 1`,
+    [pgSchema, funcName],
+  );
+  return res.rows.length > 0 ? res.rows[0].comment : null;
+}
+
+/** Get comments on indexes of a table */
+export async function getIndexComments(
+  client: pg.PoolClient,
+  tableName: string,
+  pgSchema: string,
+): Promise<Map<string, string>> {
+  const res = await client.query(
+    `SELECT ci.relname AS indexname, obj_description(ci.oid, 'pg_class') AS comment
+     FROM pg_index i
+     JOIN pg_class ci ON i.indexrelid = ci.oid
+     JOIN pg_class ct ON i.indrelid = ct.oid
+     JOIN pg_namespace n ON ct.relnamespace = n.oid
+     WHERE n.nspname = $1 AND ct.relname = $2 AND obj_description(ci.oid, 'pg_class') IS NOT NULL`,
+    [pgSchema, tableName],
+  );
+  const map = new Map<string, string>();
+  for (const row of res.rows) {
+    map.set(row.indexname, row.comment);
+  }
+  return map;
+}
+
+/** Get comments on triggers of a table */
+export async function getTriggerComments(
+  client: pg.PoolClient,
+  tableName: string,
+  pgSchema: string,
+): Promise<Map<string, string>> {
+  const res = await client.query(
+    `SELECT t.tgname AS triggername, obj_description(t.oid, 'pg_trigger') AS comment
+     FROM pg_trigger t
+     JOIN pg_class c ON t.tgrelid = c.oid
+     JOIN pg_namespace n ON c.relnamespace = n.oid
+     WHERE n.nspname = $1 AND c.relname = $2 AND NOT t.tgisinternal AND obj_description(t.oid, 'pg_trigger') IS NOT NULL`,
+    [pgSchema, tableName],
+  );
+  const map = new Map<string, string>();
+  for (const row of res.rows) {
+    map.set(row.triggername, row.comment);
+  }
+  return map;
+}
+
+/** Get comments on constraints of a table */
+export async function getConstraintComments(
+  client: pg.PoolClient,
+  tableName: string,
+  pgSchema: string,
+): Promise<Map<string, string>> {
+  const res = await client.query(
+    `SELECT c.conname AS constraintname, obj_description(c.oid, 'pg_constraint') AS comment
+     FROM pg_constraint c
+     JOIN pg_class t ON c.conrelid = t.oid
+     JOIN pg_namespace n ON t.relnamespace = n.oid
+     WHERE n.nspname = $1 AND t.relname = $2 AND obj_description(c.oid, 'pg_constraint') IS NOT NULL`,
+    [pgSchema, tableName],
+  );
+  const map = new Map<string, string>();
+  for (const row of res.rows) {
+    map.set(row.constraintname, row.comment);
+  }
+  return map;
+}
+
+/** Get comments on policies of a table */
+export async function getPolicyComments(
+  client: pg.PoolClient,
+  tableName: string,
+  pgSchema: string,
+): Promise<Map<string, string>> {
+  const res = await client.query(
+    `SELECT p.polname AS policyname, obj_description(p.oid, 'pg_policy') AS comment
+     FROM pg_policy p
+     JOIN pg_class c ON p.polrelid = c.oid
+     JOIN pg_namespace n ON c.relnamespace = n.oid
+     WHERE n.nspname = $1 AND c.relname = $2 AND obj_description(p.oid, 'pg_policy') IS NOT NULL`,
+    [pgSchema, tableName],
+  );
+  const map = new Map<string, string>();
+  for (const row of res.rows) {
+    map.set(row.policyname, row.comment);
+  }
+  return map;
+}
+
 // ─── Generated Column Introspection ──────────────────────────────────────────
 
 /** Get generated column expressions for a table */

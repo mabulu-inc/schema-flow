@@ -485,6 +485,136 @@ export async function columnIsNotNull(
 }
 
 /**
+ * Get a comment on a view.
+ */
+export async function getViewComment(connectionString: string, viewName: string): Promise<string | null> {
+  const res = await execSql(
+    connectionString,
+    `SELECT obj_description(c.oid, 'pg_class') AS comment
+     FROM pg_class c
+     JOIN pg_namespace n ON c.relnamespace = n.oid
+     WHERE n.nspname = 'public' AND c.relname = $1 AND c.relkind = 'v'`,
+    [viewName],
+  );
+  return res.rows.length > 0 ? res.rows[0].comment : null;
+}
+
+/**
+ * Get a comment on an enum type.
+ */
+export async function getEnumComment(connectionString: string, enumName: string): Promise<string | null> {
+  const res = await execSql(
+    connectionString,
+    `SELECT obj_description(t.oid, 'pg_type') AS comment
+     FROM pg_type t
+     JOIN pg_namespace n ON t.typnamespace = n.oid
+     WHERE n.nspname = 'public' AND t.typname = $1`,
+    [enumName],
+  );
+  return res.rows.length > 0 ? res.rows[0].comment : null;
+}
+
+/**
+ * Get a comment on a function.
+ */
+export async function getFunctionComment(connectionString: string, funcName: string): Promise<string | null> {
+  const res = await execSql(
+    connectionString,
+    `SELECT obj_description(p.oid, 'pg_proc') AS comment
+     FROM pg_proc p
+     JOIN pg_namespace n ON p.pronamespace = n.oid
+     WHERE n.nspname = 'public' AND p.proname = $1
+     LIMIT 1`,
+    [funcName],
+  );
+  return res.rows.length > 0 ? res.rows[0].comment : null;
+}
+
+/**
+ * Get a comment on an index.
+ */
+export async function getIndexComment(connectionString: string, indexName: string): Promise<string | null> {
+  const res = await execSql(
+    connectionString,
+    `SELECT obj_description(c.oid, 'pg_class') AS comment
+     FROM pg_class c
+     JOIN pg_namespace n ON c.relnamespace = n.oid
+     WHERE n.nspname = 'public' AND c.relname = $1`,
+    [indexName],
+  );
+  return res.rows.length > 0 ? res.rows[0].comment : null;
+}
+
+/**
+ * Get a comment on a trigger.
+ */
+export async function getTriggerComment(
+  connectionString: string,
+  triggerName: string,
+  tableName: string,
+): Promise<string | null> {
+  const res = await execSql(
+    connectionString,
+    `SELECT obj_description(t.oid, 'pg_trigger') AS comment
+     FROM pg_trigger t
+     JOIN pg_class c ON t.tgrelid = c.oid
+     JOIN pg_namespace n ON c.relnamespace = n.oid
+     WHERE n.nspname = 'public' AND c.relname = $1 AND t.tgname = $2`,
+    [tableName, triggerName],
+  );
+  return res.rows.length > 0 ? res.rows[0].comment : null;
+}
+
+/**
+ * Get a comment on a constraint.
+ */
+export async function getConstraintComment(connectionString: string, constraintName: string): Promise<string | null> {
+  const res = await execSql(
+    connectionString,
+    `SELECT obj_description(c.oid, 'pg_constraint') AS comment
+     FROM pg_constraint c
+     WHERE c.conname = $1`,
+    [constraintName],
+  );
+  return res.rows.length > 0 ? res.rows[0].comment : null;
+}
+
+/**
+ * Get a comment on a materialized view.
+ */
+export async function getMaterializedViewComment(connectionString: string, mvName: string): Promise<string | null> {
+  const res = await execSql(
+    connectionString,
+    `SELECT obj_description(c.oid, 'pg_class') AS comment
+     FROM pg_class c
+     JOIN pg_namespace n ON c.relnamespace = n.oid
+     WHERE n.nspname = 'public' AND c.relname = $1 AND c.relkind = 'm'`,
+    [mvName],
+  );
+  return res.rows.length > 0 ? res.rows[0].comment : null;
+}
+
+/**
+ * Get a comment on a policy.
+ */
+export async function getPolicyComment(
+  connectionString: string,
+  policyName: string,
+  tableName: string,
+): Promise<string | null> {
+  const res = await execSql(
+    connectionString,
+    `SELECT obj_description(p.oid, 'pg_policy') AS comment
+     FROM pg_policy p
+     JOIN pg_class c ON p.polrelid = c.oid
+     JOIN pg_namespace n ON c.relnamespace = n.oid
+     WHERE n.nspname = 'public' AND c.relname = $1 AND p.polname = $2`,
+    [tableName, policyName],
+  );
+  return res.rows.length > 0 ? res.rows[0].comment : null;
+}
+
+/**
  * Lifecycle helper for tests using the app's module-level pool (executor, scaffold, cli).
  * Registers vitest beforeEach/afterEach hooks internally.
  * Returns a mutable context object populated before each test.

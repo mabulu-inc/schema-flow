@@ -197,7 +197,7 @@ Schema-flow is designed for zero-downtime deployments. By default, it only perfo
 | Add enum value | ✓ | |
 | Create extension | ✓ | |
 | Create/replace view | ✓ | |
-| Set comment (table or column) | ✓ | |
+| Set comment (any object) | ✓ | |
 | Drop trigger (removed from YAML) | | ✓ |
 | Drop policy (removed from YAML) | | ✓ |
 | Disable RLS (removed from YAML) | | ✓ |
@@ -405,6 +405,7 @@ triggers:
 | `function` | string | required | Name of the trigger function to execute |
 | `for_each` | string | `ROW` | `ROW` or `STATEMENT` |
 | `when` | string | — | Optional SQL condition |
+| `comment` | string | — | Trigger description (`COMMENT ON TRIGGER`) |
 
 ### Row-Level Security (RLS)
 
@@ -428,6 +429,7 @@ Declare RLS policies directly on tables. Policies are diffed and managed like an
 | `using` | string | — | USING expression |
 | `check` | string | — | WITH CHECK expression |
 | `permissive` | boolean | `true` | `false` for RESTRICTIVE policy |
+| `comment` | string | — | Policy description (`COMMENT ON POLICY`) |
 
 ```yaml
 table: orders
@@ -533,6 +535,7 @@ Functions use separate files with the `fn_` prefix (e.g., `fn_update_timestamp.y
 | `body` | string | required | Function body |
 | `replace` | boolean | `true` | Use `CREATE OR REPLACE` |
 | `security` | string | — | `definer` or `invoker` (default: invoker). Use `definer` for functions that need elevated privileges (e.g., RLS helper functions). |
+| `comment` | string | — | Function description (`COMMENT ON FUNCTION`) |
 
 ```yaml
 # schema-flow/schema/fn_update_timestamp.yaml
@@ -580,7 +583,7 @@ Drift detection finds:
 - Missing or extra extensions
 - View query differences
 - Index mismatches (missing, extra, or different definition)
-- Comment differences (table and column level)
+- Comment differences (tables, columns, indexes, triggers, constraints, policies, functions)
 
 ## Migration Linting
 
@@ -955,9 +958,11 @@ This produces `GENERATED ALWAYS AS (first_name || ' ' || last_name) STORED`. Gen
 
 **Limitation:** PostgreSQL does not support altering a generated column expression in place. To change an expression, drop and re-add the column (requires `--allow-destructive`).
 
-## Table & Column Comments
+## Comments
 
-Add descriptions to tables and columns:
+Add descriptions to any schema object. Comments are diffed against the live database — unchanged comments produce no operations.
+
+### Tables and Columns
 
 ```yaml
 table: users
@@ -971,11 +976,65 @@ columns:
     comment: "User's primary email address"
 ```
 
-This generates:
-- `COMMENT ON TABLE "public"."users" IS 'Core user accounts table'`
-- `COMMENT ON COLUMN "public"."users"."email" IS 'User''s primary email address'`
+### Indexes, Triggers, Checks, and Policies
 
-Comments are diffed against the live database — unchanged comments produce no operations.
+```yaml
+table: orders
+rls: true
+columns:
+  - name: id
+    type: serial
+    primary_key: true
+  - name: amount
+    type: integer
+indexes:
+  - columns: [amount]
+    name: idx_orders_amount
+    comment: "Speed up amount range queries"
+triggers:
+  - name: trg_audit
+    timing: AFTER
+    events: [INSERT]
+    function: audit_log
+    comment: "Audit trail for new orders"
+checks:
+  - name: chk_positive_amount
+    expression: "amount > 0"
+    comment: "Amount must be positive"
+policies:
+  - name: orders_read
+    for: SELECT
+    using: "true"
+    comment: "Allow all reads"
+```
+
+### Enums, Views, Materialized Views, and Functions
+
+```yaml
+# enum_status.yaml
+enum: status
+values: [active, inactive]
+comment: "Account status type"
+
+# view_active_users.yaml
+view: active_users
+query: "SELECT * FROM users WHERE is_active"
+comment: "Only active users"
+
+# mv_daily_stats.yaml
+materialized_view: daily_stats
+query: "SELECT count(*) FROM events"
+comment: "Cached event statistics"
+
+# fn_audit_log.yaml
+name: audit_log
+language: plpgsql
+returns: trigger
+body: "BEGIN RETURN NEW; END;"
+comment: "Audit logging function"
+```
+
+All comments generate the appropriate `COMMENT ON <object>` SQL and are included in drift detection, scaffolding, and migration planning.
 
 ## Deferrable Foreign Keys
 
