@@ -225,9 +225,290 @@ npx @mabulu-inc/schema-flow run
 npx @mabulu-inc/schema-flow run --allow-destructive
 ```
 
-For zero-downtime column renames and transforms, see [Expand/Contract](#expandcontract-pattern) below. For other inherently destructive operations, use a procedural pre-migration script instead of modifying the YAML.
-
 > **`plan` vs `validate`**: `plan` generates and displays the SQL but never sends it to PostgreSQL. `validate` executes the SQL inside a transaction that always rolls back — Postgres itself checks syntax, references, and types, catching errors that `plan` cannot.
+
+## Migration Recipes
+
+Most migrations are a single YAML edit. For everything else, schema-flow provides pre/post SQL scripts and the expand/contract pattern. This section shows how to handle every type of change.
+
+### Edit your YAML
+
+These changes require nothing more than editing your schema file and running `schema-flow run`. Schema-flow diffs the YAML against the live database and generates the correct SQL.
+
+**Add a column**
+
+```yaml
+columns:
+  - name: phone
+    type: varchar(20)
+    nullable: true
+```
+
+**Drop a column** — remove it from the YAML, run with `--allow-destructive`.
+
+**Make a column NOT NULL** — set `nullable: false` (or remove `nullable` — NOT NULL is the default). Schema-flow uses a [safe 4-step pattern](#safe-not-null-pg-12) that avoids full-table locks.
+
+**Make a column nullable** — set `nullable: true`. Instant, no table rewrite.
+
+**Change a default** — edit the `default` value. Only affects future rows. To backfill existing rows, add a [post-migration script](#use-a-post-migration-script).
+
+```yaml
+  - name: status
+    type: text
+    default: "'active'"   # was "'pending'"
+```
+
+**Widen a column type** — change the type. Safe widening (e.g., `integer` → `bigint`) runs automatically. Narrowing requires `--allow-destructive`.
+
+```yaml
+  - name: counter
+    type: bigint   # was integer
+```
+
+**Add an index** — append to `indexes`. Created with `CREATE INDEX CONCURRENTLY` — no table lock.
+
+```yaml
+indexes:
+  - columns: [email]
+    unique: true
+  - columns: [status, created_at]
+    where: "status = 'active'"
+```
+
+**Add a foreign key** — add `references` to the column. Created as `NOT VALID` then validated separately, avoiding heavy locks.
+
+```yaml
+  - name: author_id
+    type: integer
+    references:
+      table: users
+      column: id
+      on_delete: CASCADE
+```
+
+**Add a check constraint**
+
+```yaml
+checks:
+  - name: chk_positive_amount
+    expression: "amount > 0"
+```
+
+**Add a unique constraint** — set `unique: true` on the column. Uses `CREATE UNIQUE INDEX CONCURRENTLY` under the hood.
+
+**Add a trigger**
+
+```yaml
+triggers:
+  - name: set_updated_at
+    timing: BEFORE
+    events: [UPDATE]
+    function: update_timestamp
+    for_each: ROW
+```
+
+**Enable row-level security**
+
+```yaml
+rls: true
+policies:
+  - name: users_own_data
+    for: ALL
+    using: "user_id = current_setting('app.user_id')::int"
+```
+
+**Create an enum** — add an `enum_*.yaml` file. Append new values to the list at any time; values can never be removed (PostgreSQL limitation).
+
+```yaml
+# schema-flow/schema/enum_status.yaml
+enum: status
+values: [active, inactive, suspended]
+```
+
+**Add an extension** — append to the extensions list.
+
+```yaml
+# schema-flow/schema/extensions.yaml
+extensions:
+  - pgcrypto
+  - pg_trgm
+```
+
+**Create a view**
+
+```yaml
+# schema-flow/schema/view_active_users.yaml
+view: active_users
+query: "SELECT id, email FROM users WHERE is_active = true"
+```
+
+**Create a materialized view**
+
+```yaml
+# schema-flow/schema/mv_daily_stats.yaml
+materialized_view: daily_stats
+query: "SELECT date_trunc('day', created_at) AS day, count(*) FROM events GROUP BY 1"
+indexes:
+  - columns: [day]
+    unique: true
+```
+
+**Add a generated column**
+
+```yaml
+  - name: full_name
+    type: text
+    generated: "first_name || ' ' || last_name"
+```
+
+**Add a comment** — works on tables, columns, indexes, triggers, checks, policies, enums, views, and functions.
+
+```yaml
+table: users
+comment: "Core user accounts"
+columns:
+  - name: email
+    type: varchar(255)
+    comment: "Primary email address"
+```
+
+### Use a pre-migration script
+
+For operations that YAML can't express — renames, data transforms, conditional DDL. Pre-migration scripts run **before** the declarative diff, so the database is already in the right state when schema-flow compares YAML to the live schema.
+
+```bash
+npx @mabulu-inc/schema-flow new pre <name>
+```
+
+**Rename a column** — rename in SQL, then update the YAML to use the new name.
+
+```sql
+BEGIN;
+ALTER TABLE "public"."users" RENAME COLUMN "name" TO "display_name";
+COMMIT;
+```
+
+**Rename a table** — rename in SQL, then rename the YAML file and update `table:`.
+
+```sql
+BEGIN;
+ALTER TABLE "public"."users" RENAME TO "accounts";
+COMMIT;
+```
+
+**Data migration**
+
+```sql
+BEGIN;
+UPDATE "public"."orders" SET status = 'active' WHERE status IS NULL;
+COMMIT;
+```
+
+> If you rename a column in YAML without a pre-migration script, schema-flow sees a DROP + ADD — it won't detect the rename automatically. The `compat/rename-detection` lint rule will warn you, but it won't fix it for you.
+
+### Use expand/contract for zero-downtime transforms
+
+When a column change would lock a large table, use expand/contract. Schema-flow adds the new column alongside the old one, installs a dual-write trigger, backfills in batches, and then drops the old column on your command. See [Expand/Contract Pattern](#expandcontract-pattern) for the full lifecycle.
+
+**Zero-downtime column rename**
+
+```yaml
+  - name: full_name
+    type: text
+    nullable: true
+    expand:
+      from: name
+      transform: "name"
+      reverse: "full_name"
+```
+
+**Zero-downtime type change** — same column name, different type.
+
+```yaml
+  - name: counter
+    type: bigint
+    nullable: true
+    expand:
+      from: counter
+      transform: "counter"
+      reverse: "counter"
+```
+
+**Split a column**
+
+```yaml
+  - name: first_name
+    type: text
+    nullable: true
+    expand:
+      from: name
+      transform: "split_part(name, ' ', 1)"
+
+  - name: last_name
+    type: text
+    nullable: true
+    expand:
+      from: name
+      transform: "split_part(name, ' ', 2)"
+```
+
+**Merge columns**
+
+```yaml
+  - name: full_name
+    type: text
+    nullable: true
+    expand:
+      from: first_name
+      transform: "first_name || ' ' || last_name"
+      reverse: "split_part(full_name, ' ', 1)"
+```
+
+After running the expand, verify and finalize:
+
+```bash
+npx @mabulu-inc/schema-flow run             # adds column + trigger + backfill
+npx @mabulu-inc/schema-flow expand-status    # check progress
+npx @mabulu-inc/schema-flow contract --allow-destructive  # drop old column
+```
+
+### Use a post-migration script
+
+Post-migration scripts run **after** the declarative diff. Use them for seed data, grants, and cleanup.
+
+```bash
+npx @mabulu-inc/schema-flow new post <name>
+```
+
+**Seed data**
+
+```sql
+BEGIN;
+INSERT INTO "public"."roles" (name) VALUES ('admin'), ('editor'), ('viewer')
+ON CONFLICT (name) DO NOTHING;
+COMMIT;
+```
+
+**Grants** — for one-time grants. For grants that should be reapplied whenever they change, use [`schema-flow/repeatable/`](#repeatable-migrations) instead.
+
+```sql
+GRANT SELECT ON ALL TABLES IN SCHEMA public TO readonly_role;
+```
+
+### Choosing the right approach
+
+| Scenario | Approach |
+| --- | --- |
+| Add/modify columns, indexes, constraints, triggers, policies | Edit YAML |
+| Rename a column (small table) | Pre-migration script |
+| Rename a column (large table, zero downtime) | Expand/contract |
+| Rename a table | Pre-migration script |
+| Change column type (small table) | Edit YAML |
+| Change column type (large table, zero downtime) | Expand/contract |
+| Split or merge columns | Expand/contract |
+| Backfill existing rows | Pre- or post-migration script |
+| Seed data | Post-migration script |
+| Grants and permissions | Post-migration script or repeatable |
 
 ## Zero-Downtime Safety
 
