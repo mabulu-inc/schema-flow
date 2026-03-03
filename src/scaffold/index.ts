@@ -70,6 +70,10 @@ export async function generateFromDb(config: SchemaFlowConfig): Promise<string[]
   const generatedFiles: string[] = [];
 
   ensureDir(config.schemaDir);
+  ensureDir(config.preDir);
+  ensureDir(config.postDir);
+  ensureDir(config.mixinsDir);
+  ensureDir(config.repeatableDir);
 
   await withClient(config.connectionString, async (client) => {
     // Generate extensions

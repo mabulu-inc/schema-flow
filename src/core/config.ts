@@ -60,8 +60,8 @@ export function resolveConfig(overrides: Partial<SchemaFlowConfig> = {}): Schema
   }
 
   const cwd = overrides.baseDir || process.cwd();
-  // Convention: look for a schema-flow/ directory inside the base dir
-  const baseDir = existsSync(path.join(cwd, CONVENTION_DIR)) ? path.join(cwd, CONVENTION_DIR) : cwd;
+  // Always use the schema-flow/ subdirectory under the project root
+  const baseDir = path.join(cwd, CONVENTION_DIR);
   const schemaDir = path.resolve(baseDir, overrides.schemaDir || DEFAULTS.schemaDir);
   const preDir = path.resolve(baseDir, overrides.preDir || DEFAULTS.preDir);
   const postDir = path.resolve(baseDir, overrides.postDir || DEFAULTS.postDir);

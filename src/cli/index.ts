@@ -367,10 +367,12 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  // Validate directories
-  const warnings = validateDirectories(config);
-  for (const w of warnings) {
-    logger.warn(w);
+  // Validate directories (skip for generate since it creates them)
+  if (args.command !== "generate") {
+    const warnings = validateDirectories(config);
+    for (const w of warnings) {
+      logger.warn(w);
+    }
   }
 
   // Test connection

@@ -42,6 +42,8 @@ export function loadConfigFile(baseDir: string): ConfigFile | null {
   const candidates = [
     path.join(baseDir, "schema-flow.config.yaml"),
     path.join(baseDir, "schema-flow.config.yml"),
+    path.join(baseDir, "schema-flow", "schema-flow.config.yaml"),
+    path.join(baseDir, "schema-flow", "schema-flow.config.yml"),
   ];
 
   for (const candidate of candidates) {
