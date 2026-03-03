@@ -39,6 +39,7 @@ interface CliArgs {
     skipChecks: boolean;
     apply: boolean;
     env?: string;
+    maxRetries?: string;
   };
 }
 
@@ -67,6 +68,7 @@ function parseArgs(argv: string[]): CliArgs {
     skipChecks: args.includes("--skip-checks"),
     apply: args.includes("--apply"),
     env: getFlag(args, "--env"),
+    maxRetries: getFlag(args, "--max-retries"),
   };
 
   return { command, subcommand, name, flags };
@@ -127,6 +129,7 @@ function printHelp(): void {
     --output, -o <file>        Write output to a file (erd, sql)
     --output-dir <dir>         Output directory (sql)
     --name <name>              Output file name suffix (sql)
+    --max-retries <n>          Max retries on transient DB errors (default: 3, 0 to disable)
     --skip-checks              Skip pre-migration checks
     --apply                    Execute the operation (down)
     --env <name>               Select environment from schema-flow.config.yaml
@@ -159,6 +162,7 @@ function printHelp(): void {
     SCHEMA_FLOW_ALLOW_DESTRUCTIVE      Set to "true" to allow destructive operations
     SCHEMA_FLOW_LOCK_TIMEOUT           Lock timeout for DDL (default: "5s")
     SCHEMA_FLOW_STATEMENT_TIMEOUT      Statement timeout for DDL (default: "30s")
+    SCHEMA_FLOW_MAX_RETRIES            Max retries on transient DB errors (default: 3)
 `);
 }
 
@@ -376,6 +380,7 @@ async function main(): Promise<void> {
       lockTimeout: args.flags.lockTimeout || envConfig.lockTimeout,
       statementTimeout: args.flags.statementTimeout || envConfig.statementTimeout,
       skipChecks: args.flags.skipChecks,
+      maxRetries: args.flags.maxRetries ? parseInt(args.flags.maxRetries, 10) : undefined,
     });
   } catch (err) {
     logger.error(err instanceof Error ? err.message : String(err));

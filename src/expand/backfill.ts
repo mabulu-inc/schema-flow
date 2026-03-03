@@ -3,6 +3,7 @@
 
 import pg from "pg";
 import { logger } from "../core/logger.js";
+import { isRetryable } from "../core/db.js";
 
 export interface BackfillOptions {
   tableName: string;
@@ -10,6 +11,7 @@ export interface BackfillOptions {
   transform: string;
   batchSize: number;
   pgSchema: string;
+  maxRetries?: number;
 }
 
 export interface BackfillResult {
@@ -29,7 +31,11 @@ export async function runBackfill(
 
   logger.info(`Starting backfill of ${tableName}.${newColumn} (batch_size=${batchSize})`);
 
+  const maxBatchRetries = options.maxRetries ?? 3;
+  const baseDelay = 1000;
+
   // Loop until no more NULLs
+  let batchRetries = 0;
   while (true) {
     const client = await pool.connect();
     try {
@@ -54,6 +60,7 @@ export async function runBackfill(
       const updated = res.rowCount || 0;
       totalRows += updated;
       batches++;
+      batchRetries = 0; // Reset on success
 
       if (updated > 0) {
         logger.debug(`  Batch ${batches}: updated ${updated} rows`);
@@ -64,6 +71,16 @@ export async function runBackfill(
       }
     } catch (err) {
       await client.query("ROLLBACK").catch(() => {});
+      if (isRetryable(err) && batchRetries < maxBatchRetries) {
+        batchRetries++;
+        const delay = baseDelay * 2 ** (batchRetries - 1);
+        logger.warn(
+          `Backfill batch timed out (${(err as any).code}), retrying in ${delay}ms (attempt ${batchRetries}/${maxBatchRetries})`,
+        );
+        client.release();
+        await new Promise((r) => setTimeout(r, delay));
+        continue;
+      }
       throw err;
     } finally {
       client.release();

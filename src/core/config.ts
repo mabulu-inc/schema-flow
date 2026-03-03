@@ -37,6 +37,8 @@ export interface SchemaFlowConfig {
   statementTimeout: string;
   /** Skip pre-migration checks (prechecks) */
   skipChecks: boolean;
+  /** Maximum number of retries for transient database errors (default: 3) */
+  maxRetries: number;
 }
 
 const CONVENTION_DIR = "schema-flow";
@@ -86,6 +88,7 @@ export function resolveConfig(overrides: Partial<SchemaFlowConfig> = {}): Schema
     lockTimeout: overrides.lockTimeout || process.env.SCHEMA_FLOW_LOCK_TIMEOUT || "5s",
     statementTimeout: overrides.statementTimeout || process.env.SCHEMA_FLOW_STATEMENT_TIMEOUT || "30s",
     skipChecks: overrides.skipChecks ?? false,
+    maxRetries: overrides.maxRetries ?? parseInt(process.env.SCHEMA_FLOW_MAX_RETRIES || "3", 10),
   };
 }
 

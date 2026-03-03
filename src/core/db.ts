@@ -2,8 +2,41 @@
 // PostgreSQL connection management with proper lifecycle
 
 import pg from "pg";
+import { logger } from "./logger.js";
 
 const { Pool } = pg;
+
+const RETRYABLE_CODES = new Set(["55P03", "57014", "40001", "40P01"]);
+
+export function isRetryable(err: unknown): boolean {
+  return err instanceof Error && RETRYABLE_CODES.has((err as any).code);
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+export async function retryOnTimeout<T>(
+  fn: () => Promise<T>,
+  opts?: { maxRetries?: number; baseDelayMs?: number; label?: string },
+): Promise<T> {
+  const maxRetries = opts?.maxRetries ?? 3;
+  const baseDelay = opts?.baseDelayMs ?? 1000;
+  const label = opts?.label ?? "operation";
+
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      if (attempt >= maxRetries || !isRetryable(err)) throw err;
+      const delay = baseDelay * 2 ** attempt;
+      logger.warn(
+        `${label} timed out (${(err as any).code}), retrying in ${delay}ms (attempt ${attempt + 1}/${maxRetries})`,
+      );
+      await sleep(delay);
+    }
+  }
+}
 
 export interface ClientOptions {
   lockTimeout?: string;

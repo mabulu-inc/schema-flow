@@ -12,7 +12,7 @@ import { parseTableFile, parseFunctionFile, parseEnumFile, parseExtensionsFile, 
 import { loadMixins, expandMixins } from "../schema/mixins.js";
 import type { FunctionSchema, TableSchema, EnumSchema, ExtensionsSchema, ViewSchema, MaterializedViewSchema } from "../schema/types.js";
 import { FileTracker } from "../core/tracker.js";
-import { withClient, type ClientOptions } from "../core/db.js";
+import { withClient, retryOnTimeout, type ClientOptions } from "../core/db.js";
 import { logger } from "../core/logger.js";
 import { discoverSchemaFiles, discoverScripts } from "../core/files.js";
 import { getFunctionComment } from "../introspect/index.js";
@@ -148,15 +148,25 @@ export async function runMigrate(config: SchemaFlowConfig): Promise<ExecutionRes
   const clientOpts = clientOptionsFromConfig(config);
 
   return await withClient(config.connectionString, async (client) => {
-    // Acquire advisory lock to prevent concurrent migrations
+    // Acquire advisory lock to prevent concurrent migrations (retry with backoff)
     if (!config.dryRun) {
-      const acquired = await tryAdvisoryLock(client, config.pgSchema);
+      const maxLockAttempts = config.maxRetries + 1;
+      let acquired = false;
+      for (let attempt = 0; attempt < maxLockAttempts; attempt++) {
+        acquired = await tryAdvisoryLock(client, config.pgSchema);
+        if (acquired) break;
+        if (attempt < maxLockAttempts - 1) {
+          const delay = 1000 * 2 ** attempt;
+          logger.warn(`Advisory lock not available, retrying in ${delay}ms (attempt ${attempt + 1}/${config.maxRetries})`);
+          await new Promise((r) => setTimeout(r, delay));
+        }
+      }
       if (!acquired) {
         return {
           phase: "migrate" as const,
           success: false,
           operationsExecuted: 0,
-          errors: ["Another schema-flow migration is already running on this schema. Advisory lock not acquired."],
+          errors: [`Another schema-flow migration is already running on this schema. Advisory lock not acquired after ${maxLockAttempts} attempts.`],
           dryRun: false,
           blockedDestructive: 0,
         };
@@ -468,27 +478,33 @@ export async function runMigrate(config: SchemaFlowConfig): Promise<ExecutionRes
         );
 
         if (nonIndexOps.length > 0) {
-          await client.query("BEGIN");
-          for (const op of nonIndexOps) {
-            const marker = op.destructive ? "[DESTRUCTIVE] " : "";
-            logger.debug(`Executing: ${marker}${op.description}`);
-            await client.query(op.sql);
-            opsExecuted++;
-          }
-          await client.query("COMMIT");
+          await retryOnTimeout(async () => {
+            await client.query("BEGIN");
+            for (const op of nonIndexOps) {
+              const marker = op.destructive ? "[DESTRUCTIVE] " : "";
+              logger.debug(`Executing: ${marker}${op.description}`);
+              await client.query(op.sql);
+            }
+            await client.query("COMMIT");
+          }, { label: "structure ops", maxRetries: config.maxRetries });
+          opsExecuted += nonIndexOps.length;
         }
 
         // Index ops outside transaction (CONCURRENTLY)
         for (const op of indexOps) {
-          logger.debug(`Executing: ${op.description}`);
-          await client.query(op.sql);
+          await retryOnTimeout(async () => {
+            logger.debug(`Executing: ${op.description}`);
+            await client.query(op.sql);
+          }, { label: `index: ${op.description}`, maxRetries: config.maxRetries });
           opsExecuted++;
         }
 
         // Drop index ops outside transaction (CONCURRENTLY)
         for (const op of dropIndexOps) {
-          logger.debug(`Executing: ${op.description}`);
-          await client.query(op.sql);
+          await retryOnTimeout(async () => {
+            logger.debug(`Executing: ${op.description}`);
+            await client.query(op.sql);
+          }, { label: `drop index: ${op.description}`, maxRetries: config.maxRetries });
           opsExecuted++;
         }
 
@@ -537,6 +553,7 @@ export async function runMigrate(config: SchemaFlowConfig): Promise<ExecutionRes
               transform,
               batchSize,
               pgSchema: config.pgSchema,
+              maxRetries: config.maxRetries,
             });
 
             await expandTracker.updateStatus(client, expandId, "expanded");
@@ -548,21 +565,25 @@ export async function runMigrate(config: SchemaFlowConfig): Promise<ExecutionRes
       // FK ops in a separate transaction
       if (plan.foreignKeyOps.length > 0) {
         logger.step("MIGRATE", `Executing ${plan.foreignKeyOps.length} foreign key operations`);
-        await client.query("BEGIN");
-        for (const op of plan.foreignKeyOps) {
-          logger.debug(`Executing: ${op.description}`);
-          await client.query(op.sql);
-          opsExecuted++;
-        }
-        await client.query("COMMIT");
+        await retryOnTimeout(async () => {
+          await client.query("BEGIN");
+          for (const op of plan.foreignKeyOps) {
+            logger.debug(`Executing: ${op.description}`);
+            await client.query(op.sql);
+          }
+          await client.query("COMMIT");
+        }, { label: "foreign key ops", maxRetries: config.maxRetries });
+        opsExecuted += plan.foreignKeyOps.length;
       }
 
       // Validate phase — runs outside any transaction, one statement at a time
       if (plan.validateOps.length > 0) {
         logger.step("MIGRATE", `Validating ${plan.validateOps.length} constraint(s)`);
         for (const op of plan.validateOps) {
-          logger.debug(`Executing: ${op.description}`);
-          await client.query(op.sql);
+          await retryOnTimeout(async () => {
+            logger.debug(`Executing: ${op.description}`);
+            await client.query(op.sql);
+          }, { label: `validate: ${op.description}`, maxRetries: config.maxRetries });
           opsExecuted++;
         }
       }
@@ -786,14 +807,16 @@ async function runSqlScripts(config: SchemaFlowConfig, dir: string, phase: "pre"
       }
 
       try {
-        await client.query("BEGIN");
-        await client.query(sql);
-        await tracker.recordFile(client, scriptPath, phase);
-        await client.query("COMMIT");
+        await retryOnTimeout(async () => {
+          await client.query("BEGIN");
+          await client.query(sql);
+          await tracker.recordFile(client, scriptPath, phase);
+          await client.query("COMMIT");
+        }, { label: `script: ${scriptName}`, maxRetries: config.maxRetries });
         opsExecuted++;
         logger.success(`  Applied: ${scriptName}`);
       } catch (err) {
-        await client.query("ROLLBACK");
+        try { await client.query("ROLLBACK"); } catch { /* may not be in txn */ }
         const msg = `Script ${scriptName} failed: ${err instanceof Error ? err.message : String(err)}`;
         errors.push(msg);
         logger.error(msg);
@@ -916,8 +939,10 @@ export async function runRepeatables(config: SchemaFlowConfig): Promise<Repeatab
 
       try {
         logger.info(`  Executing: ${scriptName}`);
-        await client.query(sql);
-        await tracker.recordFile(client, scriptPath, "repeatable");
+        await retryOnTimeout(async () => {
+          await client.query(sql);
+          await tracker.recordFile(client, scriptPath, "repeatable");
+        }, { label: `repeatable: ${scriptName}`, maxRetries: config.maxRetries });
         executed++;
         logger.success(`  Applied: ${scriptName}`);
       } catch (err) {
