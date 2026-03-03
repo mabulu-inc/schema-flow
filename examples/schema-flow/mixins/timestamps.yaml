@@ -19,3 +19,5 @@ triggers:
     events: [UPDATE]
     function: update_timestamp
     for_each: ROW
+    when: "OLD.* IS DISTINCT FROM NEW.*"
+    comment: "Auto-update updated_at on row change"
