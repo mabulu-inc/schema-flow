@@ -29,6 +29,12 @@ export interface SchemaFlowConfig {
    * Set to true via --allow-destructive flag or SCHEMA_FLOW_ALLOW_DESTRUCTIVE=true.
    */
   allowDestructive: boolean;
+  /** Lock timeout for DDL statements (default: "5s"). Set to "0" to disable. */
+  lockTimeout: string;
+  /** Statement timeout for DDL statements (default: "30s"). Set to "0" to disable. */
+  statementTimeout: string;
+  /** Skip pre-migration checks (prechecks) */
+  skipChecks: boolean;
 }
 
 const CONVENTION_DIR = "schema-flow";
@@ -73,6 +79,9 @@ export function resolveConfig(overrides: Partial<SchemaFlowConfig> = {}): Schema
     historyTable: overrides.historyTable || DEFAULTS.historyTable,
     dryRun: overrides.dryRun ?? false,
     allowDestructive,
+    lockTimeout: overrides.lockTimeout || process.env.SCHEMA_FLOW_LOCK_TIMEOUT || "5s",
+    statementTimeout: overrides.statementTimeout || process.env.SCHEMA_FLOW_STATEMENT_TIMEOUT || "30s",
+    skipChecks: overrides.skipChecks ?? false,
   };
 }
 

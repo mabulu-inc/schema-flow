@@ -91,4 +91,103 @@ export class FileTracker {
       [filePath, hash, phase],
     );
   }
+
+  // ─── Run Tracking ─────────────────────────────────────────────────────
+
+  private get runsTable(): string {
+    return `${this.table}_runs`;
+  }
+
+  /** Ensure the runs tracking table exists */
+  async ensureRunsTable(client: pg.PoolClient): Promise<void> {
+    await client.query(`
+      CREATE TABLE IF NOT EXISTS ${this.runsTable} (
+        run_id       UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        started_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+        completed_at TIMESTAMPTZ,
+        status       TEXT NOT NULL CHECK (status IN ('running','completed','failed','rolled_back')),
+        operations   JSONB NOT NULL DEFAULT '[]',
+        snapshot     JSONB NOT NULL DEFAULT '{}',
+        ops_executed INTEGER NOT NULL DEFAULT 0
+      );
+    `);
+    logger.debug(`Ensured runs table: ${this.runsTable}`);
+  }
+
+  /** Start a new migration run, returning the run_id */
+  async startRun(
+    client: pg.PoolClient,
+    operations: unknown[],
+    snapshot: unknown,
+  ): Promise<string> {
+    const res = await client.query(
+      `INSERT INTO ${this.runsTable} (status, operations, snapshot)
+       VALUES ('running', $1::jsonb, $2::jsonb)
+       RETURNING run_id::text`,
+      [JSON.stringify(operations), JSON.stringify(snapshot)],
+    );
+    return res.rows[0].run_id;
+  }
+
+  /** Mark a run as completed */
+  async completeRun(client: pg.PoolClient, runId: string, opsExecuted: number): Promise<void> {
+    await client.query(
+      `UPDATE ${this.runsTable}
+       SET status = 'completed', completed_at = now(), ops_executed = $2
+       WHERE run_id = $1::uuid`,
+      [runId, opsExecuted],
+    );
+  }
+
+  /** Mark a run as failed */
+  async failRun(client: pg.PoolClient, runId: string, opsExecuted: number): Promise<void> {
+    await client.query(
+      `UPDATE ${this.runsTable}
+       SET status = 'failed', completed_at = now(), ops_executed = $2
+       WHERE run_id = $1::uuid`,
+      [runId, opsExecuted],
+    );
+  }
+
+  /** Mark a run as rolled back */
+  async rollbackRun(client: pg.PoolClient, runId: string): Promise<void> {
+    await client.query(
+      `UPDATE ${this.runsTable}
+       SET status = 'rolled_back', completed_at = now()
+       WHERE run_id = $1::uuid`,
+      [runId],
+    );
+  }
+
+  /** Get the last completed run */
+  async getLastRun(client: pg.PoolClient): Promise<RunRecord | null> {
+    const res = await client.query<RunRecord>(
+      `SELECT run_id::text, started_at::text, completed_at::text, status, operations, snapshot, ops_executed
+       FROM ${this.runsTable}
+       WHERE status = 'completed'
+       ORDER BY started_at DESC LIMIT 1`,
+    );
+    return res.rows[0] || null;
+  }
+
+  /** List recent runs */
+  async listRuns(client: pg.PoolClient, limit = 10): Promise<RunRecord[]> {
+    const res = await client.query<RunRecord>(
+      `SELECT run_id::text, started_at::text, completed_at::text, status, operations, snapshot, ops_executed
+       FROM ${this.runsTable}
+       ORDER BY started_at DESC LIMIT $1`,
+      [limit],
+    );
+    return res.rows;
+  }
+}
+
+export interface RunRecord {
+  run_id: string;
+  started_at: string;
+  completed_at: string | null;
+  status: "running" | "completed" | "failed" | "rolled_back";
+  operations: unknown[];
+  snapshot: unknown;
+  ops_executed: number;
 }

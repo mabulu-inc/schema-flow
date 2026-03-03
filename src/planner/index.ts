@@ -3,8 +3,8 @@
 // Key design: CREATE TABLEs first (without FKs), then ALTER TABLEs for FKs last
 // Safety: destructive operations (drops, narrowing changes) are blocked by default
 
-import type { TableSchema, ColumnDef, IndexDef, TriggerDef, PolicyDef } from "../schema/types.js";
-import { introspectTable, getExistingTables } from "../introspect/index.js";
+import type { TableSchema, ColumnDef, IndexDef, CheckDef, TriggerDef, PolicyDef } from "../schema/types.js";
+import { introspectTable, getExistingTables, getTableConstraints } from "../introspect/index.js";
 import { logger } from "../core/logger.js";
 import pg from "pg";
 
@@ -14,9 +14,13 @@ export type OperationType =
   | "alter_column"
   | "drop_column"
   | "add_index"
+  | "add_unique_index"
   | "drop_index"
   | "add_check"
+  | "add_check_not_valid"
   | "add_foreign_key"
+  | "add_foreign_key_not_valid"
+  | "validate_constraint"
   | "drop_foreign_key"
   | "drop_table"
   | "create_function"
@@ -25,28 +29,40 @@ export type OperationType =
   | "enable_rls"
   | "disable_rls"
   | "create_policy"
-  | "drop_policy";
+  | "drop_policy"
+  | "expand_column"
+  | "create_dual_write_trigger"
+  | "backfill_column"
+  | "contract_column"
+  | "drop_dual_write_trigger";
 
 export interface Operation {
   type: OperationType;
   table?: string;
   sql: string;
   description: string;
-  phase: "structure" | "foreign_key";
+  phase: "structure" | "foreign_key" | "validate";
   /** Whether this operation is destructive (data loss, breaking change) */
   destructive: boolean;
+  /** Grouping key for related operations (e.g., safe NOT NULL 4-step) */
+  group?: string;
+  /** Arbitrary metadata for operation-specific data */
+  meta?: Record<string, unknown>;
 }
 
 export interface MigrationPlan {
   operations: Operation[];
   structureOps: Operation[];
   foreignKeyOps: Operation[];
+  /** Validate-phase operations (VALIDATE CONSTRAINT, SET NOT NULL, cleanup) */
+  validateOps: Operation[];
   /** Destructive operations that were blocked (safe mode) */
   blocked: Operation[];
   summary: {
     tablesToCreate: string[];
     tablesToAlter: string[];
     foreignKeysToAdd: number;
+    validateOpsCount: number;
     totalOperations: number;
     destructiveCount: number;
     blockedCount: number;
@@ -120,9 +136,10 @@ export async function buildPlan(
     }
   }
 
-  // Separate structure ops from FK ops (only from allowed)
+  // Separate structure ops from FK ops and validate ops (only from allowed)
   const structureOps = allowed.filter((op) => op.phase === "structure");
   const foreignKeyOps = allowed.filter((op) => op.phase === "foreign_key");
+  const validateOps = allowed.filter((op) => op.phase === "validate");
 
   const tablesToCreate = [...new Set(allowed.filter((o) => o.type === "create_table").map((o) => o.table!))];
 
@@ -138,15 +155,17 @@ export async function buildPlan(
   const destructiveCount = allowed.filter((o) => o.destructive).length;
 
   return {
-    operations: [...structureOps, ...foreignKeyOps],
+    operations: [...structureOps, ...foreignKeyOps, ...validateOps],
     structureOps,
     foreignKeyOps,
+    validateOps,
     blocked,
     summary: {
       tablesToCreate,
       tablesToAlter,
       foreignKeysToAdd: foreignKeyOps.length,
-      totalOperations: structureOps.length + foreignKeyOps.length,
+      validateOpsCount: validateOps.length,
+      totalOperations: structureOps.length + foreignKeyOps.length + validateOps.length,
       destructiveCount,
       blockedCount: blocked.length,
     },
@@ -175,17 +194,25 @@ function planCreateTable(schema: TableSchema, pgSchema: string): Operation[] {
 
     colDefs.push(def);
 
-    // Collect foreign keys for deferred application
+    // Collect foreign keys for deferred application (NOT VALID + VALIDATE two-step)
     if (col.references) {
       const fkName = `fk_${schema.table}_${col.name}_${col.references.table}`;
       const onDelete = col.references.on_delete || "NO ACTION";
       const onUpdate = col.references.on_update || "NO ACTION";
       fkOps.push({
-        type: "add_foreign_key",
+        type: "add_foreign_key_not_valid",
         table: schema.table,
-        sql: `ALTER TABLE "${pgSchema}"."${schema.table}" ADD CONSTRAINT "${fkName}" FOREIGN KEY ("${col.name}") REFERENCES "${pgSchema}"."${col.references.table}" ("${col.references.column}") ON DELETE ${onDelete} ON UPDATE ${onUpdate};`,
-        description: `Add FK ${schema.table}.${col.name} → ${col.references.table}.${col.references.column}`,
+        sql: `ALTER TABLE "${pgSchema}"."${schema.table}" ADD CONSTRAINT "${fkName}" FOREIGN KEY ("${col.name}") REFERENCES "${pgSchema}"."${col.references.table}" ("${col.references.column}") ON DELETE ${onDelete} ON UPDATE ${onUpdate} NOT VALID;`,
+        description: `Add FK ${schema.table}.${col.name} → ${col.references.table}.${col.references.column} (NOT VALID)`,
         phase: "foreign_key",
+        destructive: false,
+      });
+      fkOps.push({
+        type: "validate_constraint",
+        table: schema.table,
+        sql: `ALTER TABLE "${pgSchema}"."${schema.table}" VALIDATE CONSTRAINT "${fkName}";`,
+        description: `Validate FK ${fkName} on ${schema.table}`,
+        phase: "validate",
         destructive: false,
       });
     }
@@ -262,9 +289,34 @@ async function planAlterTable(client: pg.PoolClient, desired: TableSchema, pgSch
   const currentColMap = new Map(current.columns.map((c) => [c.name, c]));
   const desiredColMap = new Map(desired.columns.map((c) => [c.name, c]));
 
+  // Fetch existing constraints for FK validation state, CHECK diffing, etc.
+  const dbConstraints = await getTableConstraints(client, desired.table, pgSchema);
+  const existingFkMap = new Map<string, { convalidated: boolean }>();
+  for (const c of dbConstraints) {
+    if (c.constraint_type === "FOREIGN KEY") {
+      existingFkMap.set(c.constraint_name, { convalidated: c.convalidated });
+    }
+  }
+
+  // Track existing check constraints (excluding NOT NULL helpers)
+  const existingCheckMap = new Map<string, string>();
+  for (const c of dbConstraints) {
+    if (c.constraint_type === "CHECK" && c.check_expression) {
+      existingCheckMap.set(c.constraint_name, c.check_expression);
+    }
+  }
+
   // Add new columns
   for (const col of desired.columns) {
     if (!currentColMap.has(col.name)) {
+      // Check for expand/contract pattern
+      if (col.expand) {
+        const { planExpandColumn } = await import("../expand/planner.js");
+        const expandOps = planExpandColumn(desired.table, col.name, col.type, col.expand, pgSchema);
+        ops.push(...expandOps);
+        continue;
+      }
+
       const addSql = buildAddColumnSql(desired.table, col, pgSchema);
       ops.push({
         type: "add_column",
@@ -275,17 +327,47 @@ async function planAlterTable(client: pg.PoolClient, desired: TableSchema, pgSch
         destructive: false,
       });
 
-      // FK for new column
+      // FK for new column (NOT VALID + VALIDATE two-step)
       if (col.references) {
         const fkName = `fk_${desired.table}_${col.name}_${col.references.table}`;
         const onDelete = col.references.on_delete || "NO ACTION";
         const onUpdate = col.references.on_update || "NO ACTION";
         ops.push({
-          type: "add_foreign_key",
+          type: "add_foreign_key_not_valid",
           table: desired.table,
-          sql: `ALTER TABLE "${pgSchema}"."${desired.table}" ADD CONSTRAINT "${fkName}" FOREIGN KEY ("${col.name}") REFERENCES "${pgSchema}"."${col.references.table}" ("${col.references.column}") ON DELETE ${onDelete} ON UPDATE ${onUpdate};`,
-          description: `Add FK ${desired.table}.${col.name} → ${col.references.table}.${col.references.column}`,
+          sql: `ALTER TABLE "${pgSchema}"."${desired.table}" ADD CONSTRAINT "${fkName}" FOREIGN KEY ("${col.name}") REFERENCES "${pgSchema}"."${col.references.table}" ("${col.references.column}") ON DELETE ${onDelete} ON UPDATE ${onUpdate} NOT VALID;`,
+          description: `Add FK ${desired.table}.${col.name} → ${col.references.table}.${col.references.column} (NOT VALID)`,
           phase: "foreign_key",
+          destructive: false,
+        });
+        ops.push({
+          type: "validate_constraint",
+          table: desired.table,
+          sql: `ALTER TABLE "${pgSchema}"."${desired.table}" VALIDATE CONSTRAINT "${fkName}";`,
+          description: `Validate FK ${fkName} on ${desired.table}`,
+          phase: "validate",
+          destructive: false,
+        });
+      }
+
+      // Safe UNIQUE for new column on existing table
+      if (col.unique) {
+        const idxName = `idx_${desired.table}_${col.name}_unique`;
+        const constraintName = `uq_${desired.table}_${col.name}`;
+        ops.push({
+          type: "add_unique_index",
+          table: desired.table,
+          sql: `CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS "${idxName}" ON "${pgSchema}"."${desired.table}" ("${col.name}");`,
+          description: `Create unique index ${idxName} on ${desired.table}.${col.name}`,
+          phase: "structure",
+          destructive: false,
+        });
+        ops.push({
+          type: "alter_column",
+          table: desired.table,
+          sql: `ALTER TABLE "${pgSchema}"."${desired.table}" ADD CONSTRAINT "${constraintName}" UNIQUE USING INDEX "${idxName}";`,
+          description: `Add unique constraint ${constraintName} on ${desired.table}.${col.name} using index`,
+          phase: "validate",
           destructive: false,
         });
       }
@@ -293,10 +375,50 @@ async function planAlterTable(client: pg.PoolClient, desired: TableSchema, pgSch
       continue;
     }
 
-    // Alter existing columns if type/nullable/default changed
+    // Alter existing columns if type/nullable/default/unique changed
     const existing = currentColMap.get(col.name)!;
-    const alterOps = planAlterColumn(desired.table, existing, col, pgSchema);
+    const alterOps = planAlterColumn(desired.table, existing, col, pgSchema, existingCheckMap);
     ops.push(...alterOps);
+
+    // Handle FK diff for existing columns
+    if (col.references) {
+      const fkName = `fk_${desired.table}_${col.name}_${col.references.table}`;
+      const existingFk = existingFkMap.get(fkName);
+      if (existingFk) {
+        // FK exists — if not validated, emit only VALIDATE
+        if (!existingFk.convalidated) {
+          ops.push({
+            type: "validate_constraint",
+            table: desired.table,
+            sql: `ALTER TABLE "${pgSchema}"."${desired.table}" VALIDATE CONSTRAINT "${fkName}";`,
+            description: `Validate FK ${fkName} on ${desired.table}`,
+            phase: "validate",
+            destructive: false,
+          });
+        }
+        // If fully validated, no op needed
+      } else if (!existing.references) {
+        // FK doesn't exist yet — add with NOT VALID + VALIDATE
+        const onDelete = col.references.on_delete || "NO ACTION";
+        const onUpdate = col.references.on_update || "NO ACTION";
+        ops.push({
+          type: "add_foreign_key_not_valid",
+          table: desired.table,
+          sql: `ALTER TABLE "${pgSchema}"."${desired.table}" ADD CONSTRAINT "${fkName}" FOREIGN KEY ("${col.name}") REFERENCES "${pgSchema}"."${col.references.table}" ("${col.references.column}") ON DELETE ${onDelete} ON UPDATE ${onUpdate} NOT VALID;`,
+          description: `Add FK ${desired.table}.${col.name} → ${col.references.table}.${col.references.column} (NOT VALID)`,
+          phase: "foreign_key",
+          destructive: false,
+        });
+        ops.push({
+          type: "validate_constraint",
+          table: desired.table,
+          sql: `ALTER TABLE "${pgSchema}"."${desired.table}" VALIDATE CONSTRAINT "${fkName}";`,
+          description: `Validate FK ${fkName} on ${desired.table}`,
+          phase: "validate",
+          destructive: false,
+        });
+      }
+    }
   }
 
   // Columns in DB but NOT in the desired schema → destructive drop
@@ -311,6 +433,12 @@ async function planAlterTable(client: pg.PoolClient, desired: TableSchema, pgSch
         destructive: true,
       });
     }
+  }
+
+  // Check constraint diff for existing tables
+  if (desired.checks) {
+    const checkOps = planCheckDiff(desired.table, desired.checks, existingCheckMap, pgSchema);
+    ops.push(...checkOps);
   }
 
   // Trigger diff
@@ -329,7 +457,13 @@ async function planAlterTable(client: pg.PoolClient, desired: TableSchema, pgSch
   return ops;
 }
 
-function planAlterColumn(tableName: string, existing: ColumnDef, desired: ColumnDef, pgSchema: string): Operation[] {
+function planAlterColumn(
+  tableName: string,
+  existing: ColumnDef,
+  desired: ColumnDef,
+  pgSchema: string,
+  existingCheckMap?: Map<string, string>,
+): Operation[] {
   const ops: Operation[] = [];
   const qualifiedTable = `"${pgSchema}"."${tableName}"`;
 
@@ -350,9 +484,7 @@ function planAlterColumn(tableName: string, existing: ColumnDef, desired: Column
     }
   }
 
-  // Nullable change
-  // Convention: columns are NOT NULL by default.
-  // nullable=true means nullable; nullable=undefined or nullable=false means NOT NULL.
+  // Nullable change — use safe NOT NULL 4-step pattern (PG 12+)
   const existingNullable = existing.nullable === true;
   const desiredNullable = desired.nullable === true;
   if (existingNullable !== desiredNullable && !desired.primary_key) {
@@ -367,16 +499,77 @@ function planAlterColumn(tableName: string, existing: ColumnDef, desired: Column
         destructive: false,
       });
     } else {
-      // Making a column NOT NULL is destructive (can fail if NULLs exist)
+      // Safe NOT NULL: 4-step pattern
+      const groupKey = `safe_not_null_${tableName}_${desired.name}`;
+      const checkName = `chk_${tableName}_${desired.name}_nn`;
+      const hasExistingCheck = existingCheckMap?.has(checkName);
+
+      if (!hasExistingCheck) {
+        // Step 1: ADD CHECK ... NOT VALID
+        ops.push({
+          type: "add_check_not_valid",
+          table: tableName,
+          sql: `ALTER TABLE ${qualifiedTable} ADD CONSTRAINT "${checkName}" CHECK ("${desired.name}" IS NOT NULL) NOT VALID;`,
+          description: `Add NOT NULL check on ${tableName}.${desired.name} (NOT VALID)`,
+          phase: "structure",
+          destructive: false,
+          group: groupKey,
+        });
+      }
+      // Step 2: VALIDATE CONSTRAINT
+      ops.push({
+        type: "validate_constraint",
+        table: tableName,
+        sql: `ALTER TABLE ${qualifiedTable} VALIDATE CONSTRAINT "${checkName}";`,
+        description: `Validate NOT NULL check on ${tableName}.${desired.name}`,
+        phase: "validate",
+        destructive: false,
+        group: groupKey,
+      });
+      // Step 3: SET NOT NULL (instant with validated check constraint, PG 12+)
       ops.push({
         type: "alter_column",
         table: tableName,
         sql: `ALTER TABLE ${qualifiedTable} ALTER COLUMN "${desired.name}" SET NOT NULL;`,
         description: `Make ${tableName}.${desired.name} NOT NULL`,
-        phase: "structure",
-        destructive: true,
+        phase: "validate",
+        destructive: false,
+        group: groupKey,
+      });
+      // Step 4: DROP the helper check constraint (cleanup)
+      ops.push({
+        type: "alter_column",
+        table: tableName,
+        sql: `ALTER TABLE ${qualifiedTable} DROP CONSTRAINT "${checkName}";`,
+        description: `Drop helper check ${checkName} on ${tableName}`,
+        phase: "validate",
+        destructive: false,
+        group: groupKey,
       });
     }
+  }
+
+  // Unique change for existing columns
+  if (desired.unique && !existing.unique) {
+    // Safe UNIQUE via concurrent index
+    const idxName = `idx_${tableName}_${desired.name}_unique`;
+    const constraintName = `uq_${tableName}_${desired.name}`;
+    ops.push({
+      type: "add_unique_index",
+      table: tableName,
+      sql: `CREATE UNIQUE INDEX CONCURRENTLY IF NOT EXISTS "${idxName}" ON "${pgSchema}"."${tableName}" ("${desired.name}");`,
+      description: `Create unique index ${idxName} on ${tableName}.${desired.name}`,
+      phase: "structure",
+      destructive: false,
+    });
+    ops.push({
+      type: "alter_column",
+      table: tableName,
+      sql: `ALTER TABLE ${qualifiedTable} ADD CONSTRAINT "${constraintName}" UNIQUE USING INDEX "${idxName}";`,
+      description: `Add unique constraint ${constraintName} on ${tableName}.${desired.name} using index`,
+      phase: "validate",
+      destructive: false,
+    });
   }
 
   // Default change
@@ -396,6 +589,50 @@ function planAlterColumn(tableName: string, existing: ColumnDef, desired: Column
       sql: `ALTER TABLE ${qualifiedTable} ALTER COLUMN "${desired.name}" DROP DEFAULT;`,
       description: `Drop default for ${tableName}.${desired.name}`,
       phase: "structure",
+      destructive: false,
+    });
+  }
+
+  return ops;
+}
+
+/** Diff CHECK constraints for existing tables (NOT VALID + VALIDATE two-step) */
+function planCheckDiff(
+  tableName: string,
+  desired: CheckDef[],
+  existingCheckMap: Map<string, string>,
+  pgSchema: string,
+): Operation[] {
+  const ops: Operation[] = [];
+  const qualifiedTable = `"${pgSchema}"."${tableName}"`;
+
+  for (const check of desired) {
+    const checkName = check.name || `chk_${tableName}_${Date.now()}`;
+    // Skip safe-NOT-NULL helper constraints (handled in planAlterColumn)
+    if (checkName.endsWith("_nn")) continue;
+
+    // Check if constraint already exists
+    const existingExpr = existingCheckMap.get(checkName);
+    if (existingExpr) {
+      // Already exists — no action needed (check expression diffing is complex, skip for now)
+      continue;
+    }
+
+    // New CHECK on existing table: NOT VALID + VALIDATE two-step
+    ops.push({
+      type: "add_check_not_valid",
+      table: tableName,
+      sql: `ALTER TABLE ${qualifiedTable} ADD CONSTRAINT "${checkName}" CHECK (${check.expression}) NOT VALID;`,
+      description: `Add check constraint ${checkName} on ${tableName} (NOT VALID)`,
+      phase: "structure",
+      destructive: false,
+    });
+    ops.push({
+      type: "validate_constraint",
+      table: tableName,
+      sql: `ALTER TABLE ${qualifiedTable} VALIDATE CONSTRAINT "${checkName}";`,
+      description: `Validate check constraint ${checkName} on ${tableName}`,
+      phase: "validate",
       destructive: false,
     });
   }
@@ -716,7 +953,7 @@ function isNarrowingTypeChange(from: string, to: string): boolean {
   return true;
 }
 
-function normalizeType(t: string): string {
+export function normalizeType(t: string): string {
   const lower = t.toLowerCase().trim();
   const map: Record<string, string> = {
     serial: "integer",

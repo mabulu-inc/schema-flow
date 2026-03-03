@@ -13,13 +13,16 @@ import {
   functionExists,
   policyExists,
   rlsEnabled,
+  constraintValidated,
+  constraintExists,
+  columnIsNotNull,
   execSql,
   useTestProject,
 } from "./helpers.js";
 import { resolveConfig } from "../src/core/config.js";
-import { runAll, runPre, runMigrate, runPost, runValidate } from "../src/executor/index.js";
+import { runAll, runPre, runMigrate, runPost, runValidate, tryAdvisoryLock, releaseAdvisoryLock } from "../src/executor/index.js";
 import { logger, LogLevel } from "../src/core/logger.js";
-import { closePool } from "../src/core/db.js";
+import { closePool, getPool } from "../src/core/db.js";
 
 // Suppress logs during tests
 logger.setLevel(LogLevel.SILENT);
@@ -850,5 +853,200 @@ columns:
 
     // Table should NOT exist after validate (rolled back)
     expect(await tableExists(ctx.connectionString, "users")).toBe(false);
+  });
+
+  // ─── ZDM Feature Tests ──────────────────────────────────────────────────
+
+  it("advisory lock prevents concurrent migration", async () => {
+    writeSchema(
+      ctx.project.schemaDir,
+      "users.yaml",
+      `table: users
+columns:
+  - name: id
+    type: serial
+    primary_key: true
+`,
+    );
+
+    const config = resolveConfig({
+      connectionString: ctx.connectionString,
+      baseDir: ctx.project.baseDir,
+      dryRun: false,
+    });
+
+    // Acquire the advisory lock manually using a separate connection
+    const pg = await import("pg");
+    const pool = new pg.default.Pool({ connectionString: ctx.connectionString, max: 2 });
+    const lockClient = await pool.connect();
+    const acquired = await tryAdvisoryLock(lockClient, "public");
+    expect(acquired).toBe(true);
+
+    try {
+      // Now try to run migrate — should fail because lock is held
+      const result = await runMigrate(config);
+      expect(result.success).toBe(false);
+      expect(result.errors[0]).toContain("Advisory lock");
+    } finally {
+      await releaseAdvisoryLock(lockClient, "public");
+      lockClient.release();
+      await pool.end();
+    }
+  });
+
+  it("advisory lock released after migration (second run succeeds)", async () => {
+    writeSchema(
+      ctx.project.schemaDir,
+      "users.yaml",
+      `table: users
+columns:
+  - name: id
+    type: serial
+    primary_key: true
+`,
+    );
+
+    const config = resolveConfig({
+      connectionString: ctx.connectionString,
+      baseDir: ctx.project.baseDir,
+      dryRun: false,
+    });
+
+    const first = await runMigrate(config);
+    expect(first.success).toBe(true);
+
+    await closePool();
+
+    // Second run should succeed (lock released)
+    const second = await runMigrate(config);
+    expect(second.success).toBe(true);
+  });
+
+  it("creates FK with NOT VALID then validates", async () => {
+    writeSchema(
+      ctx.project.schemaDir,
+      "authors.yaml",
+      `table: authors
+columns:
+  - name: id
+    type: serial
+    primary_key: true
+  - name: name
+    type: varchar(100)
+`,
+    );
+
+    writeSchema(
+      ctx.project.schemaDir,
+      "books.yaml",
+      `table: books
+columns:
+  - name: id
+    type: serial
+    primary_key: true
+  - name: author_id
+    type: integer
+    references:
+      table: authors
+      column: id
+      on_delete: CASCADE
+  - name: title
+    type: varchar(255)
+`,
+    );
+
+    const config = resolveConfig({
+      connectionString: ctx.connectionString,
+      baseDir: ctx.project.baseDir,
+      dryRun: false,
+    });
+
+    const result = await runMigrate(config);
+    expect(result.success).toBe(true);
+
+    // FK should exist and be validated after the full migration
+    expect(await fkExists(ctx.connectionString, "fk_books_author_id_authors")).toBe(true);
+    expect(await constraintValidated(ctx.connectionString, "fk_books_author_id_authors")).toBe(true);
+  });
+
+  it("safe NOT NULL via 4-step pattern", async () => {
+    // Create table with nullable column
+    await execSql(
+      ctx.connectionString,
+      `CREATE TABLE items (id serial PRIMARY KEY, name text)`,
+    );
+    // Insert data so there are no NULLs
+    await execSql(ctx.connectionString, `INSERT INTO items (name) VALUES ('test')`);
+
+    writeSchema(
+      ctx.project.schemaDir,
+      "items.yaml",
+      `table: items
+columns:
+  - name: id
+    type: serial
+    primary_key: true
+  - name: name
+    type: text
+`,
+    );
+
+    const config = resolveConfig({
+      connectionString: ctx.connectionString,
+      baseDir: ctx.project.baseDir,
+      dryRun: false,
+    });
+
+    const result = await runMigrate(config);
+    expect(result.success).toBe(true);
+
+    // Column should be NOT NULL
+    expect(await columnIsNotNull(ctx.connectionString, "items", "name")).toBe(true);
+
+    // Helper check constraint should be cleaned up
+    expect(await constraintExists(ctx.connectionString, "chk_items_name_nn")).toBe(false);
+  });
+
+  it("validate does not modify the database with ZDM ops", async () => {
+    writeSchema(
+      ctx.project.schemaDir,
+      "authors.yaml",
+      `table: authors
+columns:
+  - name: id
+    type: serial
+    primary_key: true
+`,
+    );
+
+    writeSchema(
+      ctx.project.schemaDir,
+      "books.yaml",
+      `table: books
+columns:
+  - name: id
+    type: serial
+    primary_key: true
+  - name: author_id
+    type: integer
+    references:
+      table: authors
+      column: id
+`,
+    );
+
+    const config = resolveConfig({
+      connectionString: ctx.connectionString,
+      baseDir: ctx.project.baseDir,
+      dryRun: false,
+    });
+
+    const result = await runValidate(config);
+    expect(result.valid).toBe(true);
+    expect(result.operationsChecked).toBeGreaterThan(0);
+
+    // Tables should NOT exist (rolled back)
+    expect(await tableExists(ctx.connectionString, "authors")).toBe(false);
+    expect(await tableExists(ctx.connectionString, "books")).toBe(false);
   });
 });

@@ -26,8 +26,16 @@ interface CliArgs {
     connectionString?: string;
     baseDir?: string;
     schema?: string;
+    lockTimeout?: string;
+    statementTimeout?: string;
     help: boolean;
     version: boolean;
+    json: boolean;
+    output?: string;
+    outputDir?: string;
+    outputName?: string;
+    skipChecks: boolean;
+    apply: boolean;
   };
 }
 
@@ -45,8 +53,16 @@ function parseArgs(argv: string[]): CliArgs {
     connectionString: getFlag(args, "--connection-string") || getFlag(args, "--db"),
     baseDir: getFlag(args, "--dir"),
     schema: getFlag(args, "--schema"),
+    lockTimeout: getFlag(args, "--lock-timeout"),
+    statementTimeout: getFlag(args, "--statement-timeout"),
     help: args.includes("--help") || args.includes("-h"),
     version: args.includes("--version") || args.includes("-V"),
+    json: args.includes("--json"),
+    output: getFlag(args, "--output") || getFlag(args, "-o"),
+    outputDir: getFlag(args, "--output-dir"),
+    outputName: getFlag(args, "--name"),
+    skipChecks: args.includes("--skip-checks"),
+    apply: args.includes("--apply"),
   };
 
   return { command, subcommand, name, flags };
@@ -79,6 +95,13 @@ function printHelp(): void {
     ${"\x1b[36m"}run post${"\x1b[0m"}            Run only post-migration scripts
     ${"\x1b[36m"}plan${"\x1b[0m"}               Show what would be done without applying (alias for run --dry-run)
     ${"\x1b[36m"}validate${"\x1b[0m"}           Validate schema against a live database (dry run with rollback)
+    ${"\x1b[36m"}drift${"\x1b[0m"}              Compare live database vs. YAML and report differences
+    ${"\x1b[36m"}lint${"\x1b[0m"}               Static analysis of migration plan for dangerous patterns
+    ${"\x1b[36m"}down${"\x1b[0m"}               Show or apply reverse migration (rollback last run)
+    ${"\x1b[36m"}sql${"\x1b[0m"}                Generate migration SQL file from plan
+    ${"\x1b[36m"}erd${"\x1b[0m"}                Generate Mermaid ER diagram from schema YAML
+    ${"\x1b[36m"}contract${"\x1b[0m"}            Finalize expand/contract: drop old columns and triggers
+    ${"\x1b[36m"}expand-status${"\x1b[0m"}       Show current expand/contract operation status
     ${"\x1b[36m"}generate${"\x1b[0m"}            Generate schema files from existing database
     ${"\x1b[36m"}new pre <name>${"\x1b[0m"}      Scaffold a new pre-migration script
     ${"\x1b[36m"}new post <name>${"\x1b[0m"}     Scaffold a new post-migration script
@@ -89,8 +112,16 @@ function printHelp(): void {
   ${"\x1b[1m"}Options:${"\x1b[0m"}
     --dry-run, --plan, -n      Show what would be done without applying
     --allow-destructive        Allow destructive operations (column drops, type narrowing, etc.)
+    --lock-timeout <duration>  Lock timeout for DDL statements (default: 5s, 0 to disable)
+    --statement-timeout <dur>  Statement timeout for DDL statements (default: 30s, 0 to disable)
     --verbose, -v              Enable debug logging
     --quiet, -q                Suppress non-essential output
+    --json                     Output in JSON format (drift, lint)
+    --output, -o <file>        Write output to a file (erd, sql)
+    --output-dir <dir>         Output directory (sql)
+    --name <name>              Output file name suffix (sql)
+    --skip-checks              Skip pre-migration checks
+    --apply                    Execute the operation (down)
     --connection-string, --db  PostgreSQL connection string (or set DATABASE_URL)
     --dir                      Base directory (default: current directory)
     --schema                   PostgreSQL schema (default: public)
@@ -118,6 +149,8 @@ function printHelp(): void {
     DATABASE_URL                       Fallback connection string
     SCHEMA_FLOW_LOG_LEVEL              Log level: debug, info, warn, error, silent
     SCHEMA_FLOW_ALLOW_DESTRUCTIVE      Set to "true" to allow destructive operations
+    SCHEMA_FLOW_LOCK_TIMEOUT           Lock timeout for DDL (default: "5s")
+    SCHEMA_FLOW_STATEMENT_TIMEOUT      Statement timeout for DDL (default: "30s")
 `);
 }
 
@@ -247,6 +280,29 @@ async function main(): Promise<void> {
     process.exit(0);
   }
 
+  // ERD command doesn't need a database connection
+  if (args.command === "erd") {
+    const baseDir = args.flags.baseDir || process.cwd();
+    const minimalConfig = resolveConfig({
+      baseDir,
+      connectionString: "not-needed",
+    });
+
+    const { generateErdFromFiles } = await import("../erd/index.js");
+    const erd = await generateErdFromFiles(minimalConfig.schemaDir, minimalConfig.mixinsDir);
+
+    if (args.flags.output) {
+      const { writeFileSync, mkdirSync } = await import("node:fs");
+      const path = await import("node:path");
+      mkdirSync(path.dirname(args.flags.output), { recursive: true });
+      writeFileSync(args.flags.output, erd, "utf-8");
+      logger.success(`ERD written to ${args.flags.output}`);
+    } else {
+      process.stdout.write(erd);
+    }
+    process.exit(0);
+  }
+
   // Scaffold commands don't need a database connection
   if (args.command === "new") {
     const baseDir = args.flags.baseDir || process.cwd();
@@ -277,6 +333,9 @@ async function main(): Promise<void> {
       pgSchema: args.flags.schema,
       dryRun: args.flags.dryRun || args.command === "plan",
       allowDestructive: args.flags.allowDestructive,
+      lockTimeout: args.flags.lockTimeout,
+      statementTimeout: args.flags.statementTimeout,
+      skipChecks: args.flags.skipChecks,
     });
   } catch (err) {
     logger.error(err instanceof Error ? err.message : String(err));
@@ -380,8 +439,134 @@ async function main(): Promise<void> {
         break;
       }
 
+      case "lint": {
+        logger.banner("Migration Lint");
+        const pathMod = await import("node:path");
+        const { discoverSchemaFiles: discoverFiles } = await import("../core/files.js");
+        const schemaFilesForLint = await discoverFiles(config.schemaDir);
+        const tableFilesForLint = schemaFilesForLint.filter(
+          (f) => !pathMod.default.basename(f).startsWith("fn_"),
+        );
+
+        // Parse and expand
+        const { parseTableFile: ptf } = await import("../schema/parser.js");
+        const { loadMixins: lm, expandMixins: em } = await import("../schema/mixins.js");
+        const parsedForLint = tableFilesForLint.map((f) => ptf(f));
+        const mixinsForLint = await lm(config.mixinsDir);
+        const expandedForLint = em(parsedForLint, mixinsForLint);
+
+        // Build plan with allowDestructive to see all ops
+        const { buildPlan: bp } = await import("../planner/index.js");
+        const { withClient: wc } = await import("../core/db.js");
+        const lintPlan = await wc(config.connectionString, async (client) => {
+          return bp(client, expandedForLint, config.pgSchema, { allowDestructive: true });
+        });
+
+        const { lintPlan: lint, formatLintFindings, formatLintFindingsJson } = await import("../lint/index.js");
+        const findings = lint({ plan: lintPlan, schemas: expandedForLint, pgSchema: config.pgSchema });
+
+        if (args.flags.json) {
+          console.log(formatLintFindingsJson(findings));
+        } else {
+          console.log(formatLintFindings(findings));
+        }
+
+        const hasErrors = findings.some((f) => f.severity === "error");
+        if (hasErrors) exitCode = 1;
+        break;
+      }
+
+      case "drift": {
+        logger.banner("Drift Detection");
+        const { detectDrift } = await import("../drift/index.js");
+        const { formatDriftReport, formatDriftReportJson } = await import("../drift/format.js");
+        const report = await detectDrift(config);
+        if (args.flags.json) {
+          console.log(formatDriftReportJson(report));
+        } else if (!args.flags.quiet) {
+          console.log(formatDriftReport(report));
+        }
+        if (report.hasDrift) exitCode = 1;
+        break;
+      }
+
+      case "sql": {
+        logger.banner("SQL File Generation");
+        const pathModSql = await import("node:path");
+        const { discoverSchemaFiles: discoverSql } = await import("../core/files.js");
+        const sqlSchemaFiles = await discoverSql(config.schemaDir);
+        const sqlFunctionFiles = sqlSchemaFiles.filter((f) => pathModSql.default.basename(f).startsWith("fn_"));
+        const sqlTableFiles = sqlSchemaFiles.filter((f) => !pathModSql.default.basename(f).startsWith("fn_"));
+
+        const { parseTableFile: ptfSql, parseFunctionFile: pffSql } = await import("../schema/parser.js");
+        const { loadMixins: lmSql, expandMixins: emSql } = await import("../schema/mixins.js");
+
+        const sqlParsedFunctions = sqlFunctionFiles.map((f) => pffSql(f));
+        const sqlParsed = sqlTableFiles.map((f) => ptfSql(f));
+        const sqlMixins = await lmSql(config.mixinsDir);
+        const sqlExpanded = emSql(sqlParsed, sqlMixins);
+
+        const { buildPlan: bpSql } = await import("../planner/index.js");
+        const { withClient: wcSql } = await import("../core/db.js");
+        const sqlPlan = await wcSql(config.connectionString, async (client) => {
+          return bpSql(client, sqlExpanded, config.pgSchema, {
+            allowDestructive: config.allowDestructive,
+          });
+        });
+
+        const { generateSqlFile, formatMigrationSql } = await import("../sql/index.js");
+
+        if (args.flags.output) {
+          // Write to specific file
+          const { writeFileSync: wfs } = await import("node:fs");
+          const sql = formatMigrationSql(sqlPlan, sqlParsedFunctions, {
+            pgSchema: config.pgSchema,
+            version: version,
+          });
+          wfs(args.flags.output, sql, "utf-8");
+          logger.success(`SQL written to ${args.flags.output}`);
+        } else {
+          const outputDir = args.flags.outputDir || pathModSql.default.join(config.baseDir, "migrations");
+          const result = generateSqlFile(sqlPlan, sqlParsedFunctions, {
+            outputDir,
+            name: args.flags.outputName,
+            pgSchema: config.pgSchema,
+            version: version,
+          });
+          logger.success(`Generated ${result.filePath} (${result.operationCount} operations)`);
+        }
+        break;
+      }
+
       case "generate": {
         await generateFromDb(config);
+        break;
+      }
+
+      case "contract": {
+        logger.banner("Contract (Expand/Contract)");
+        const { runContract } = await import("../expand/executor.js");
+        const contractResult = await runContract(config, {
+          allowDestructive: args.flags.allowDestructive,
+        });
+        if (!contractResult.success) exitCode = 1;
+        break;
+      }
+
+      case "expand-status": {
+        const { showExpandStatus } = await import("../expand/executor.js");
+        await showExpandStatus(config);
+        break;
+      }
+
+      case "down": {
+        logger.banner("Down Migration (Rollback)");
+        const { runDown } = await import("../rollback/executor.js");
+        const downResult = await runDown(config, {
+          apply: args.flags.apply,
+          allowDestructive: args.flags.allowDestructive,
+        });
+        if (!downResult.success) exitCode = 1;
         break;
       }
 

@@ -1,6 +1,17 @@
 // src/schema/types.ts
 // Type definitions for declarative YAML table schemas
 
+export interface ExpandDef {
+  /** Source column name */
+  from: string;
+  /** SQL expression to transform old → new */
+  transform: string;
+  /** SQL expression to reverse (new → old), for dual-write trigger */
+  reverse?: string;
+  /** Batch size for backfill (default: 1000) */
+  batch_size?: number;
+}
+
 export interface ColumnDef {
   name: string;
   type: string;
@@ -13,7 +24,11 @@ export interface ColumnDef {
     column: string;
     on_delete?: "CASCADE" | "SET NULL" | "SET DEFAULT" | "RESTRICT" | "NO ACTION";
     on_update?: "CASCADE" | "SET NULL" | "SET DEFAULT" | "RESTRICT" | "NO ACTION";
+    /** Whether the FK constraint is validated (true) or NOT VALID (false). Populated by introspection. */
+    validated?: boolean;
   };
+  /** Expand/contract: column rename/transform via dual-write trigger */
+  expand?: ExpandDef;
 }
 
 export interface IndexDef {
@@ -77,6 +92,15 @@ export interface MixinSchema {
   policies?: PolicyDef[];
 }
 
+export interface PrecheckDef {
+  /** Check name */
+  name: string;
+  /** SQL query that must return a truthy value */
+  query: string;
+  /** Custom failure message */
+  message?: string;
+}
+
 export interface TableSchema {
   /** Table name (derived from filename if not specified) */
   table: string;
@@ -98,6 +122,8 @@ export interface TableSchema {
   force_rls?: boolean;
   /** RLS policies */
   policies?: PolicyDef[];
+  /** Pre-migration checks: SQL assertions that must pass before migration */
+  prechecks?: PrecheckDef[];
 }
 
 export interface ForeignKeyAction {

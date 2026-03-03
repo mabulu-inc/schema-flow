@@ -4,7 +4,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { parse as parseYaml } from "yaml";
-import type { TableSchema, FunctionSchema, ColumnDef, TriggerDef, PolicyDef, MixinSchema } from "./types.js";
+import type { TableSchema, FunctionSchema, ColumnDef, TriggerDef, PolicyDef, MixinSchema, PrecheckDef, ExpandDef } from "./types.js";
 import { logger } from "../core/logger.js";
 
 /** Parse a single column definition from raw YAML */
@@ -33,6 +33,14 @@ export function parseColumnDef(col: Record<string, unknown>, filePath: string): 
           }
             ? T
             : never,
+        }
+      : undefined,
+    expand: col.expand
+      ? {
+          from: (col.expand as Record<string, unknown>).from as string,
+          transform: (col.expand as Record<string, unknown>).transform as string,
+          reverse: (col.expand as Record<string, unknown>).reverse as string | undefined,
+          batch_size: (col.expand as Record<string, unknown>).batch_size as number | undefined,
         }
       : undefined,
   };
@@ -149,6 +157,19 @@ export function parseTableFile(filePath: string): TableSchema {
 
   if (raw.policies && Array.isArray(raw.policies)) {
     schema.policies = raw.policies.map((p: Record<string, unknown>) => parsePolicyDef(p, filePath));
+  }
+
+  if (raw.prechecks && Array.isArray(raw.prechecks)) {
+    schema.prechecks = raw.prechecks.map((pc: Record<string, unknown>) => {
+      if (!pc.name || !pc.query) {
+        throw new Error(`Each precheck in ${filePath} must have "name" and "query"`);
+      }
+      return {
+        name: String(pc.name),
+        query: String(pc.query),
+        message: pc.message !== undefined ? String(pc.message) : undefined,
+      } as PrecheckDef;
+    });
   }
 
   logger.debug(`Parsed schema for table: ${schema.table}`, { columns: schema.columns.length });

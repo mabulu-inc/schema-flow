@@ -126,6 +126,14 @@ npx @mabulu-inc/schema-flow run
 | `schema-flow run pre` | Run only pre-migration scripts |
 | `schema-flow run migrate` | Run only declarative schema migration |
 | `schema-flow run post` | Run only post-migration scripts |
+| `schema-flow drift` | Compare live database vs. YAML and report differences |
+| `schema-flow lint` | Static analysis of migration plan for dangerous patterns |
+| `schema-flow down` | Show reverse migration plan (rollback last run) |
+| `schema-flow down --apply` | Execute reverse migration |
+| `schema-flow sql` | Generate migration SQL file from plan |
+| `schema-flow erd` | Generate Mermaid ER diagram from schema YAML |
+| `schema-flow contract` | Finalize expand/contract: drop old columns and triggers |
+| `schema-flow expand-status` | Show current expand/contract operation status |
 | `schema-flow status` | Show pending changes |
 | `schema-flow generate` | Generate YAML schema files from an existing database |
 | `schema-flow new pre <name>` | Scaffold a timestamped pre-migration script |
@@ -143,9 +151,17 @@ npx @mabulu-inc/schema-flow <command> [options]
 | Flag | Description |
 | --- | --- |
 | `--dry-run`, `--plan`, `-n` | Preview without applying |
-| `--allow-destructive` | Allow destructive operations (column drops, type narrowing, SET NOT NULL, disable RLS, drop policies) |
+| `--allow-destructive` | Allow destructive operations (column drops, type narrowing, disable RLS, drop policies) |
+| `--lock-timeout <duration>` | Lock timeout for DDL statements (default: `5s`, `0` to disable) |
+| `--statement-timeout <duration>` | Statement timeout for DDL statements (default: `30s`, `0` to disable) |
 | `--verbose`, `-v` | Debug-level logging |
 | `--quiet`, `-q` | Suppress non-essential output |
+| `--json` | Output in JSON format (`drift`, `lint`) |
+| `--output`, `-o <file>` | Write output to a file (`erd`, `sql`) |
+| `--output-dir <dir>` | Output directory (`sql`) |
+| `--name <name>` | Output file name suffix (`sql`) |
+| `--skip-checks` | Skip pre-migration checks |
+| `--apply` | Execute the operation (`down`) |
 | `--connection-string`, `--db` | PostgreSQL connection string |
 | `--dir` | Base directory (default: cwd) |
 | `--schema` | PostgreSQL schema (default: `public`) |
@@ -161,10 +177,12 @@ Schema-flow is designed for zero-downtime deployments. By default, it only perfo
 | Create table | ✓ | |
 | Add column | ✓ | |
 | Add index (CONCURRENTLY) | ✓ | |
-| Add foreign key | ✓ | |
-| Add check constraint | ✓ | |
+| Add foreign key (NOT VALID + VALIDATE) | ✓ | |
+| Add check constraint (NOT VALID + VALIDATE) | ✓ | |
+| Add unique constraint (concurrent index) | ✓ | |
 | Widen type (int → bigint) | ✓ | |
 | Make column nullable | ✓ | |
+| Make column NOT NULL (safe 4-step) | ✓ | |
 | Set / change default | ✓ | |
 | Create trigger | ✓ | |
 | Replace trigger (changed definition) | ✓ | |
@@ -177,7 +195,6 @@ Schema-flow is designed for zero-downtime deployments. By default, it only perfo
 | Disable RLS (removed from YAML) | | ✓ |
 | Drop column | | ✓ |
 | Narrow type (bigint → int) | | ✓ |
-| Make column NOT NULL | | ✓ |
 
 If a column exists in the database but is missing from the schema YAML, schema-flow will **not** drop it unless `--allow-destructive` is set. Instead, it logs a warning and skips the drop.
 
@@ -197,9 +214,85 @@ npx @mabulu-inc/schema-flow run
 npx @mabulu-inc/schema-flow run --allow-destructive
 ```
 
-For column renames and other inherently destructive operations, use a procedural pre-migration script instead of modifying the YAML.
+For zero-downtime column renames and transforms, see [Expand/Contract](#expandcontract-pattern) below. For other inherently destructive operations, use a procedural pre-migration script instead of modifying the YAML.
 
 > **`plan` vs `validate`**: `plan` generates and displays the SQL but never sends it to PostgreSQL. `validate` executes the SQL inside a transaction that always rolls back — Postgres itself checks syntax, references, and types, catching errors that `plan` cannot.
+
+## Zero-Downtime Safety
+
+Schema-flow uses several techniques to avoid taking heavy locks that block queries on large tables.
+
+### Lock Timeout
+
+Every DDL session sets `lock_timeout` (default: `5s`). If a lock can't be acquired within this window, the statement fails fast instead of blocking all other queries while waiting.
+
+```bash
+npx @mabulu-inc/schema-flow run --lock-timeout 10s
+# or via environment variable
+SCHEMA_FLOW_LOCK_TIMEOUT=10s npx @mabulu-inc/schema-flow run
+# disable lock timeout
+npx @mabulu-inc/schema-flow run --lock-timeout 0
+```
+
+### Statement Timeout
+
+A `statement_timeout` (default: `30s`) guards against runaway migrations. Set to `0` to disable.
+
+```bash
+npx @mabulu-inc/schema-flow run --statement-timeout 60s
+SCHEMA_FLOW_STATEMENT_TIMEOUT=60s npx @mabulu-inc/schema-flow run
+# disable statement timeout
+npx @mabulu-inc/schema-flow run --statement-timeout 0
+```
+
+### Advisory Locking
+
+Schema-flow acquires a PostgreSQL advisory lock (derived from the schema name) before running any non-dry-run migration. This prevents two concurrent `schema-flow run` processes from colliding. The lock is released automatically when the migration completes or fails.
+
+### Foreign Keys — NOT VALID + VALIDATE
+
+Foreign keys are created in two steps:
+
+1. `ADD CONSTRAINT ... NOT VALID` — takes a brief `SHARE ROW EXCLUSIVE` lock, does not scan the table
+2. `VALIDATE CONSTRAINT` — runs outside any transaction, takes only `SHARE UPDATE EXCLUSIVE` (doesn't block reads or writes)
+
+This avoids the full-table lock that a normal `ADD CONSTRAINT ... FOREIGN KEY` would take.
+
+### Safe NOT NULL (PG 12+)
+
+Making a column NOT NULL traditionally requires an `ACCESS EXCLUSIVE` lock and a full table scan. Schema-flow uses a safe 4-step pattern instead:
+
+1. `ADD CONSTRAINT chk_{table}_{col}_nn CHECK ("{col}" IS NOT NULL) NOT VALID` — instant, no scan
+2. `VALIDATE CONSTRAINT chk_{table}_{col}_nn` — scans rows outside a transaction (`SHARE UPDATE EXCLUSIVE`)
+3. `ALTER COLUMN SET NOT NULL` — instant when PG sees the validated check constraint (PG 12+)
+4. `DROP CONSTRAINT chk_{table}_{col}_nn` — cleanup
+
+All steps are non-destructive and safe-mode compatible. If a migration is interrupted mid-way, re-running picks up where it left off.
+
+### Safe CHECK Constraints
+
+CHECK constraints on existing tables use the same two-step approach: `ADD CONSTRAINT ... NOT VALID` followed by `VALIDATE CONSTRAINT`.
+
+### Safe UNIQUE Constraints
+
+Adding a unique constraint to an existing column avoids a table lock:
+
+1. `CREATE UNIQUE INDEX CONCURRENTLY` — builds the index without blocking writes
+2. `ADD CONSTRAINT ... UNIQUE USING INDEX` — attaches the index as a constraint (instant)
+
+### Execution Order
+
+```
+1. Functions               (in transaction)
+2. Structure ops — non-index (in transaction)  ← includes ADD CONSTRAINT ... NOT VALID
+3. Structure ops — indexes   (outside txn)     ← CONCURRENTLY
+4. FK ops                    (in transaction)   ← NOT VALID
+5. Validate ops              (outside txn)     ← VALIDATE CONSTRAINT, SET NOT NULL, cleanup
+```
+
+### Intermediate State Recovery
+
+If a migration is interrupted after step 2 but before step 5, re-running `schema-flow run` detects the intermediate state (e.g., an unvalidated FK or existing helper check constraint) and emits only the remaining steps.
 
 ## Schema YAML Reference
 
@@ -439,6 +532,185 @@ body: |
 
 Function files (prefixed with `fn_`) are automatically detected and applied with `CREATE OR REPLACE FUNCTION` before schema migration runs. This ensures trigger functions exist before any triggers reference them.
 
+## Drift Detection
+
+Compare your YAML schema files against a live database and report bi-directional differences:
+
+```bash
+npx @mabulu-inc/schema-flow drift          # text report
+npx @mabulu-inc/schema-flow drift --json   # JSON output
+npx @mabulu-inc/schema-flow drift --quiet  # exit code only (0 = no drift, 1 = drift)
+```
+
+Drift detection finds:
+- Tables in the DB with no matching YAML file
+- Tables in YAML missing from the DB
+- Column differences (type, nullable, default, unique)
+- Missing or extra columns, triggers, policies, and functions
+- RLS setting mismatches
+
+## Migration Linting
+
+Run static analysis on the migration plan to catch dangerous patterns before applying:
+
+```bash
+npx @mabulu-inc/schema-flow lint          # text report
+npx @mabulu-inc/schema-flow lint --json   # JSON output
+```
+
+Built-in rules:
+
+| Rule | Severity | Detects |
+| --- | --- | --- |
+| `lock/set-not-null-direct` | warning | SET NOT NULL without safe 4-step pattern |
+| `lock/add-column-with-default` | info | ADD COLUMN with DEFAULT (safe PG11+, informational) |
+| `data/drop-column` | warning | Any DROP COLUMN |
+| `data/drop-table` | warning | Any DROP TABLE |
+| `data/type-narrowing` | warning | Destructive type changes |
+| `perf/missing-fk-index` | warning | FK columns without matching index |
+| `compat/rename-detection` | info | Drop+add same-type columns (possible rename) |
+| `compat/type-change` | warning | Any column type change |
+
+Exit code is `1` if any error-severity findings are present.
+
+## Down Migrations (Rollback)
+
+Schema-flow records each migration run (operations + pre-migration snapshot). You can view and execute reverse migrations:
+
+```bash
+npx @mabulu-inc/schema-flow down                          # show reverse plan
+npx @mabulu-inc/schema-flow down --apply                  # execute rollback
+npx @mabulu-inc/schema-flow down --apply --allow-destructive  # include destructive reverses
+```
+
+Reverse operations are computed automatically from the forward plan:
+
+| Forward | Reverse | Notes |
+| --- | --- | --- |
+| CREATE TABLE | DROP TABLE CASCADE | Destructive |
+| ADD COLUMN | DROP COLUMN | Destructive |
+| ALTER TYPE | ALTER TYPE back | Uses snapshot |
+| SET NOT NULL | DROP NOT NULL | Safe |
+| ADD INDEX | DROP INDEX CONCURRENTLY | Safe |
+| ADD CONSTRAINT | DROP CONSTRAINT | Safe |
+| CREATE TRIGGER | DROP TRIGGER | Safe |
+| ENABLE RLS | DISABLE RLS | Safe |
+| CREATE POLICY | DROP POLICY | Safe |
+| DROP COLUMN/TABLE | Irreversible | Data gone |
+
+## SQL File Generation
+
+Generate a versioned SQL migration file from the current plan:
+
+```bash
+npx @mabulu-inc/schema-flow sql                              # default: migrations/ dir
+npx @mabulu-inc/schema-flow sql --output-dir ./my-migrations  # custom directory
+npx @mabulu-inc/schema-flow sql --name add_users              # custom name suffix
+npx @mabulu-inc/schema-flow sql --output ./migrate.sql        # specific file
+```
+
+The generated file groups operations into proper transaction boundaries:
+
+```
+Functions         → BEGIN/COMMIT
+Structure ops     → BEGIN/COMMIT
+Indexes           → outside transaction (CONCURRENTLY)
+Foreign keys      → BEGIN/COMMIT (NOT VALID)
+Validate          → outside transaction
+```
+
+## Pre-Migration Checks
+
+Add SQL assertions to your YAML schema that must pass before a migration runs:
+
+```yaml
+table: users
+prechecks:
+  - name: no_null_emails
+    query: "SELECT count(*) = 0 FROM users WHERE email IS NULL"
+    message: "All users must have emails before adding NOT NULL"
+columns:
+  - name: email
+    type: varchar(255)
+```
+
+Each check query must return a single truthy value. If any check fails, the migration is aborted. Skip checks with `--skip-checks`.
+
+## ERD / Mermaid Output
+
+Generate a Mermaid ER diagram from your YAML schemas (no database connection required):
+
+```bash
+npx @mabulu-inc/schema-flow erd                    # stdout
+npx @mabulu-inc/schema-flow erd --output schema.md  # write to file
+```
+
+Output example:
+
+```
+erDiagram
+    USERS {
+        serial id PK
+        varchar(255) email UK
+        text name
+    }
+    ORDERS {
+        serial id PK
+        integer user_id FK
+    }
+    USERS ||--o{ ORDERS : "user_id"
+```
+
+## Expand/Contract Pattern
+
+For zero-downtime column renames, type changes, and transforms, schema-flow supports the expand/contract pattern (similar to pgroll). This avoids downtime by using dual-write triggers and batched backfills.
+
+### 1. Define the expand
+
+```yaml
+table: users
+columns:
+  - name: full_name
+    type: text
+    nullable: true
+    expand:
+      from: name           # existing column to transform from
+      transform: "name"    # SQL expression for old → new
+      reverse: "full_name" # SQL expression for new → old (optional, enables reverse writes)
+      batch_size: 5000     # rows per backfill batch (default: 1000)
+```
+
+### 2. Apply the migration
+
+```bash
+npx @mabulu-inc/schema-flow run
+```
+
+This performs the expand phase:
+1. `ALTER TABLE ADD COLUMN full_name text` (nullable)
+2. Creates a dual-write trigger function that syncs writes between old and new columns
+3. Creates the trigger on the table
+4. Runs a batched backfill (`FOR UPDATE SKIP LOCKED` to avoid blocking)
+
+### 3. Check status
+
+```bash
+npx @mabulu-inc/schema-flow expand-status
+```
+
+### 4. Contract (finalize)
+
+Once you've verified the backfill is complete and updated application code:
+
+```bash
+npx @mabulu-inc/schema-flow contract --allow-destructive
+```
+
+This:
+1. Verifies no NULLs remain in the new column
+2. Drops the dual-write trigger and function
+3. Drops the old column
+
 ## Pre/Post Migration Scripts
 
 For operations that can't be expressed declaratively — column renames, data migrations, grants, seed data — use SQL scripts.
@@ -554,6 +826,8 @@ Run all commands from your project root — schema-flow automatically finds the 
 | `SCHEMA_FLOW_DATABASE_URL` | Alternative connection string (takes precedence) |
 | `SCHEMA_FLOW_LOG_LEVEL` | `debug`, `info`, `warn`, `error`, `silent` |
 | `SCHEMA_FLOW_ALLOW_DESTRUCTIVE` | Set to `true` to allow destructive operations (same as `--allow-destructive`) |
+| `SCHEMA_FLOW_LOCK_TIMEOUT` | Lock timeout for DDL statements (default: `5s`) |
+| `SCHEMA_FLOW_STATEMENT_TIMEOUT` | Statement timeout for DDL statements (default: `30s`) |
 
 ## Programmatic API
 

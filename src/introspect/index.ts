@@ -23,6 +23,8 @@ export interface DbConstraint {
   foreign_column_name: string | null;
   delete_rule: string | null;
   update_rule: string | null;
+  convalidated: boolean;
+  check_expression: string | null;
 }
 
 export interface DbIndex {
@@ -254,7 +256,9 @@ export async function getTableConstraints(
          WHEN 'c' THEN 'CASCADE'
          WHEN 'n' THEN 'SET NULL'
          WHEN 'd' THEN 'SET DEFAULT'
-       END AS update_rule
+       END AS update_rule,
+       c.convalidated,
+       pg_get_constraintdef(c.oid) AS check_expression
      FROM pg_constraint c
      JOIN pg_class t ON c.conrelid = t.oid
      JOIN pg_namespace n ON t.relnamespace = n.oid
@@ -343,6 +347,7 @@ export async function introspectTable(
           on_update: (fkCols[0].update_rule || "NO ACTION") as ColumnDef["references"] extends { on_update?: infer T }
             ? T
             : never,
+          validated: fkCols[0].convalidated,
         };
       }
     }

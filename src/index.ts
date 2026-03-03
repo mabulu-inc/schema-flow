@@ -5,6 +5,7 @@ export { resolveConfig, type SchemaFlowConfig } from "./core/config.js";
 export { logger, LogLevel } from "./core/logger.js";
 export { FileTracker } from "./core/tracker.js";
 export { testConnection, closePool, withClient, withTransaction } from "./core/db.js";
+export { discoverSchemaFiles, discoverScripts, utcTimestamp } from "./core/files.js";
 export { parseTableFile, parseFunctionFile, parseMixinFile } from "./schema/parser.js";
 export type {
   TableSchema,
@@ -15,9 +16,11 @@ export type {
   MixinSchema,
   FunctionSchema,
   ForeignKeyAction,
+  PrecheckDef,
+  ExpandDef,
 } from "./schema/types.js";
 export { loadMixins, expandMixins } from "./schema/mixins.js";
-export { buildPlan, type MigrationPlan, type Operation, type PlanOptions } from "./planner/index.js";
+export { buildPlan, normalizeType, type MigrationPlan, type Operation, type PlanOptions } from "./planner/index.js";
 export { runAll, runPre, runMigrate, runPost, type ExecutionResult, type Phase } from "./executor/index.js";
 export { scaffoldPre, scaffoldPost, generateFromDb, scaffoldInit } from "./scaffold/index.js";
 export {
@@ -29,3 +32,36 @@ export {
   getTableIndexes,
   getTableTriggers,
 } from "./introspect/index.js";
+
+// Drift detection
+export { detectDrift, type DriftReport, type DriftItem } from "./drift/index.js";
+export { formatDriftReport, formatDriftReportJson } from "./drift/format.js";
+
+// Migration linting
+export {
+  lintPlan,
+  formatLintFindings,
+  formatLintFindingsJson,
+  type LintFinding,
+  type LintContext,
+  type LintRule,
+  type LintSeverity,
+} from "./lint/index.js";
+export { builtinRules } from "./lint/rules.js";
+
+// Rollback / down migrations
+export { computeRollback, type ReverseOperation, type RollbackResult } from "./rollback/index.js";
+export { captureSnapshot, type MigrationSnapshot } from "./rollback/snapshot.js";
+export { runDown, type DownResult } from "./rollback/executor.js";
+
+// SQL file generation
+export { formatMigrationSql, generateSqlFile, type SqlGenerateResult } from "./sql/index.js";
+
+// ERD / Mermaid output
+export { generateMermaidErd, generateErdFromFiles } from "./erd/index.js";
+
+// Expand/contract
+export { ExpandTracker, type ExpandRecord } from "./expand/tracker.js";
+export { planExpandColumn, planContractColumn } from "./expand/planner.js";
+export { runBackfill, type BackfillOptions, type BackfillResult } from "./expand/backfill.js";
+export { runContract, showExpandStatus, type ContractResult } from "./expand/executor.js";

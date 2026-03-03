@@ -3,16 +3,48 @@
 // Supports plan (dry-run) and apply modes, and running phases independently
 
 import { readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
 import path from "node:path";
-import { glob } from "glob";
+import pg from "pg";
 import type { SchemaFlowConfig } from "../core/config.js";
 import { buildPlan } from "../planner/index.js";
 import { parseTableFile, parseFunctionFile } from "../schema/parser.js";
 import { loadMixins, expandMixins } from "../schema/mixins.js";
-import type { FunctionSchema } from "../schema/types.js";
+import type { FunctionSchema, TableSchema } from "../schema/types.js";
 import { FileTracker } from "../core/tracker.js";
-import { withClient } from "../core/db.js";
+import { withClient, type ClientOptions } from "../core/db.js";
 import { logger } from "../core/logger.js";
+import { discoverSchemaFiles, discoverScripts } from "../core/files.js";
+
+/** Derive a stable advisory lock key from the pgSchema name */
+function advisoryLockKey(pgSchema: string): string {
+  const hash = createHash("sha256").update(`schema-flow:${pgSchema}`).digest();
+  // Use first 8 bytes as a BigInt for pg_try_advisory_lock
+  const bigint = hash.readBigInt64BE(0);
+  // Ensure positive by taking absolute value
+  return (bigint < 0n ? -bigint : bigint).toString();
+}
+
+/** Try to acquire an advisory lock. Returns true if acquired. */
+export async function tryAdvisoryLock(client: pg.PoolClient, pgSchema: string): Promise<boolean> {
+  const key = advisoryLockKey(pgSchema);
+  const res = await client.query(`SELECT pg_try_advisory_lock(${key}) AS acquired`);
+  return res.rows[0].acquired === true;
+}
+
+/** Release the advisory lock */
+export async function releaseAdvisoryLock(client: pg.PoolClient, pgSchema: string): Promise<void> {
+  const key = advisoryLockKey(pgSchema);
+  await client.query(`SELECT pg_advisory_unlock(${key})`).catch(() => {});
+}
+
+/** Build ClientOptions from config */
+function clientOptionsFromConfig(config: SchemaFlowConfig): ClientOptions {
+  return {
+    lockTimeout: config.lockTimeout,
+    statementTimeout: config.statementTimeout,
+  };
+}
 
 export type Phase = "pre" | "migrate" | "post";
 
@@ -32,18 +64,52 @@ export interface ValidationResult {
   operationsChecked: number;
 }
 
-/** Discover and sort SQL scripts in a directory */
-async function discoverScripts(dir: string): Promise<string[]> {
-  const patterns = ["*.sql"];
-  const files = await glob(patterns.map((p) => path.join(dir, p)));
-  return files.sort(); // Alphabetical sort → timestamps in filenames ensure order
+export interface PrecheckResult {
+  passed: boolean;
+  failures: { name: string; table: string; message: string }[];
 }
 
-/** Discover YAML schema files */
-async function discoverSchemaFiles(dir: string): Promise<string[]> {
-  const patterns = ["*.yaml", "*.yml"];
-  const files = await glob(patterns.map((p) => path.join(dir, p)));
-  return files.sort();
+/** Run all prechecks from schemas in a read-only transaction */
+export async function runPrechecks(client: pg.PoolClient, schemas: TableSchema[]): Promise<PrecheckResult> {
+  const failures: PrecheckResult["failures"] = [];
+  const allChecks = schemas.flatMap((s) =>
+    (s.prechecks || []).map((pc) => ({ ...pc, table: s.table })),
+  );
+
+  if (allChecks.length === 0) {
+    return { passed: true, failures: [] };
+  }
+
+  logger.step("PRECHECKS", `Running ${allChecks.length} pre-migration check(s)`);
+
+  try {
+    await client.query("BEGIN READ ONLY");
+
+    for (const check of allChecks) {
+      try {
+        const res = await client.query(check.query);
+        const value = res.rows[0] ? Object.values(res.rows[0])[0] : null;
+        const passed = Boolean(value) && value !== 0 && value !== "0" && value !== "f" && value !== "false";
+        if (!passed) {
+          const msg = check.message || `Precheck "${check.name}" on table ${check.table} returned falsy value`;
+          failures.push({ name: check.name, table: check.table, message: msg });
+          logger.error(`  FAIL: ${check.name} — ${msg}`);
+        } else {
+          logger.info(`  PASS: ${check.name}`);
+        }
+      } catch (err) {
+        const msg = `Precheck "${check.name}" on table ${check.table} failed: ${err instanceof Error ? err.message : String(err)}`;
+        failures.push({ name: check.name, table: check.table, message: msg });
+        logger.error(`  FAIL: ${check.name} — ${msg}`);
+      }
+    }
+
+    await client.query("ROLLBACK");
+  } catch {
+    try { await client.query("ROLLBACK"); } catch { /* ignore */ }
+  }
+
+  return { passed: failures.length === 0, failures };
 }
 
 /** Run pre-migration SQL scripts */
@@ -78,8 +144,25 @@ export async function runMigrate(config: SchemaFlowConfig): Promise<ExecutionRes
   }
 
   const tracker = new FileTracker(config.historyTable);
+  const clientOpts = clientOptionsFromConfig(config);
 
   return await withClient(config.connectionString, async (client) => {
+    // Acquire advisory lock to prevent concurrent migrations
+    if (!config.dryRun) {
+      const acquired = await tryAdvisoryLock(client, config.pgSchema);
+      if (!acquired) {
+        return {
+          phase: "migrate" as const,
+          success: false,
+          operationsExecuted: 0,
+          errors: ["Another schema-flow migration is already running on this schema. Advisory lock not acquired."],
+          dryRun: false,
+          blockedDestructive: 0,
+        };
+      }
+    }
+
+    try {
     await tracker.ensureTable(client);
     const tracked = await tracker.getTracked(client);
 
@@ -188,6 +271,21 @@ export async function runMigrate(config: SchemaFlowConfig): Promise<ExecutionRes
     }
     const expandedSchemas = expandMixins(allSchemas, mixinMap);
 
+    // Run prechecks (unless skipped)
+    if (!config.skipChecks && !config.dryRun) {
+      const precheckResult = await runPrechecks(client, expandedSchemas);
+      if (!precheckResult.passed) {
+        return {
+          phase: "migrate",
+          success: false,
+          operationsExecuted: 0,
+          errors: precheckResult.failures.map((f) => f.message),
+          dryRun: false,
+          blockedDestructive: 0,
+        };
+      }
+    }
+
     // Build migration plan — pass safety flag
     const plan = await buildPlan(client, expandedSchemas, config.pgSchema, {
       allowDestructive: config.allowDestructive,
@@ -223,6 +321,9 @@ export async function runMigrate(config: SchemaFlowConfig): Promise<ExecutionRes
     if (plan.summary.foreignKeysToAdd > 0) {
       logger.info(`  Foreign keys to add: ${plan.summary.foreignKeysToAdd}`);
     }
+    if (plan.summary.validateOpsCount > 0) {
+      logger.info(`  Validate operations: ${plan.summary.validateOpsCount}`);
+    }
     if (plan.summary.destructiveCount > 0) {
       logger.warn(`  Destructive operations: ${plan.summary.destructiveCount} (--allow-destructive is ON)`);
     }
@@ -252,16 +353,27 @@ export async function runMigrate(config: SchemaFlowConfig): Promise<ExecutionRes
       };
     }
 
-    // Execute: structure ops first, then FK ops
-    // Use a transaction for structure operations
+    // Capture snapshot and start run tracking
+    const { captureSnapshot } = await import("../rollback/snapshot.js");
+    const affectedTables = [
+      ...new Set(plan.operations.filter((o) => o.table).map((o) => o.table!)),
+    ];
+    const snapshot = await captureSnapshot(client, affectedTables, config.pgSchema);
+    await tracker.ensureRunsTable(client);
+    const runId = await tracker.startRun(client, plan.operations, snapshot);
+
+    // Execute: structure ops → FK ops → validate ops
     try {
       // Structure ops in a transaction
       if (plan.structureOps.length > 0) {
         logger.step("MIGRATE", `Executing ${plan.structureOps.length} structure operations`);
         // Note: CREATE INDEX CONCURRENTLY cannot run inside a transaction,
         // so we separate index ops from other structure ops
-        const indexOps = plan.structureOps.filter((o) => o.type === "add_index");
-        const nonIndexOps = plan.structureOps.filter((o) => o.type !== "add_index");
+        const indexOps = plan.structureOps.filter((o) => o.type === "add_index" || o.type === "add_unique_index");
+        const backfillOps = plan.structureOps.filter((o) => o.type === "backfill_column");
+        const nonIndexOps = plan.structureOps.filter(
+          (o) => o.type !== "add_index" && o.type !== "add_unique_index" && o.type !== "backfill_column",
+        );
 
         if (nonIndexOps.length > 0) {
           await client.query("BEGIN");
@@ -280,6 +392,51 @@ export async function runMigrate(config: SchemaFlowConfig): Promise<ExecutionRes
           await client.query(op.sql);
           opsExecuted++;
         }
+
+        // Backfill ops — each runs in batched transactions
+        if (backfillOps.length > 0) {
+          const { runBackfill } = await import("../expand/backfill.js");
+          const { ExpandTracker } = await import("../expand/tracker.js");
+          const expandTracker = new ExpandTracker();
+          await expandTracker.ensureTable(client);
+          const pool = (await import("../core/db.js")).getPool(config.connectionString);
+
+          for (const op of backfillOps) {
+            const meta = op.meta as Record<string, unknown>;
+            const tableName = op.table!;
+            const newCol = meta.to as string;
+            const oldCol = meta.from as string;
+            const transform = meta.transform as string;
+            const batchSize = (meta.batchSize as number) || 1000;
+            const triggerName = meta.triggerName as string;
+            const functionName = meta.functionName as string;
+
+            // Register expand
+            const expandId = await expandTracker.register(client, {
+              tableName,
+              oldColumn: oldCol,
+              newColumn: newCol,
+              transform,
+              triggerName,
+              functionName,
+              batchSize,
+            });
+
+            await expandTracker.updateStatus(client, expandId, "backfilling");
+
+            // Run batched backfill
+            await runBackfill(pool, {
+              tableName,
+              newColumn: newCol,
+              transform,
+              batchSize,
+              pgSchema: config.pgSchema,
+            });
+
+            await expandTracker.updateStatus(client, expandId, "expanded");
+            opsExecuted++;
+          }
+        }
       }
 
       // FK ops in a separate transaction
@@ -294,10 +451,23 @@ export async function runMigrate(config: SchemaFlowConfig): Promise<ExecutionRes
         await client.query("COMMIT");
       }
 
+      // Validate phase — runs outside any transaction, one statement at a time
+      if (plan.validateOps.length > 0) {
+        logger.step("MIGRATE", `Validating ${plan.validateOps.length} constraint(s)`);
+        for (const op of plan.validateOps) {
+          logger.debug(`Executing: ${op.description}`);
+          await client.query(op.sql);
+          opsExecuted++;
+        }
+      }
+
       // Record all processed files
       for (const f of [...newFiles, ...changedFiles]) {
         await tracker.recordFile(client, f, "schema");
       }
+
+      // Mark run as completed
+      await tracker.completeRun(client, runId, opsExecuted);
 
       logger.success(`Migration complete — ${opsExecuted} operations executed`);
       if (plan.blocked.length > 0) {
@@ -314,6 +484,12 @@ export async function runMigrate(config: SchemaFlowConfig): Promise<ExecutionRes
       } catch {
         // Rollback may fail if no transaction is active
       }
+      // Mark run as failed
+      try {
+        await tracker.failRun(client, runId, opsExecuted);
+      } catch {
+        // Best effort
+      }
     }
 
     return {
@@ -324,7 +500,13 @@ export async function runMigrate(config: SchemaFlowConfig): Promise<ExecutionRes
       dryRun: false,
       blockedDestructive: plan.blocked.length,
     };
-  });
+    } finally {
+      // Release advisory lock
+      if (!config.dryRun) {
+        await releaseAdvisoryLock(client, config.pgSchema);
+      }
+    }
+  }, clientOpts);
 }
 
 /** Validate schema against a live database (executes in a transaction, always rolls back) */
@@ -394,6 +576,11 @@ export async function runValidate(config: SchemaFlowConfig): Promise<ValidationR
       return { valid: true, errors: [], operationsChecked: 0 };
     }
 
+    // Skip validate ops (they require committed data)
+    if (plan.validateOps.length > 0) {
+      logger.info(`Skipping ${plan.validateOps.length} validate operations (requires committed data)`);
+    }
+
     // Execute everything inside a single transaction that always rolls back
     try {
       await client.query("BEGIN");
@@ -409,18 +596,20 @@ export async function runValidate(config: SchemaFlowConfig): Promise<ValidationR
         opsChecked++;
       }
 
-      // Structure ops — strip CONCURRENTLY from index SQL (can't run inside a transaction)
+      // Structure ops — strip CONCURRENTLY and NOT VALID from SQL (can't run inside a transaction)
       for (const op of plan.structureOps) {
-        const sql = op.sql.replace(/\bCONCURRENTLY\s+/gi, "");
+        let sql = op.sql.replace(/\bCONCURRENTLY\s+/gi, "");
+        sql = sql.replace(/\s+NOT VALID/gi, "");
         logger.debug(`Validating: ${op.description}`);
         await client.query(sql);
         opsChecked++;
       }
 
-      // FK ops
+      // FK ops — strip NOT VALID for validation
       for (const op of plan.foreignKeyOps) {
+        const sql = op.sql.replace(/\s+NOT VALID/gi, "");
         logger.debug(`Validating: ${op.description}`);
-        await client.query(op.sql);
+        await client.query(sql);
         opsChecked++;
       }
 
@@ -454,6 +643,7 @@ async function runSqlScripts(config: SchemaFlowConfig, dir: string, phase: "pre"
   }
 
   const tracker = new FileTracker(config.historyTable);
+  const clientOpts = clientOptionsFromConfig(config);
 
   return await withClient(config.connectionString, async (client) => {
     await tracker.ensureTable(client);
@@ -514,7 +704,7 @@ async function runSqlScripts(config: SchemaFlowConfig, dir: string, phase: "pre"
       dryRun: config.dryRun,
       blockedDestructive: 0,
     };
-  });
+  }, clientOpts);
 }
 
 /** Run all phases: pre → migrate → post */

@@ -280,6 +280,53 @@ export async function rlsEnabled(connectionString: string, tableName: string): P
 }
 
 /**
+ * Check if a constraint is validated (convalidated=true in pg_constraint).
+ */
+export async function constraintValidated(
+  connectionString: string,
+  constraintName: string,
+): Promise<boolean> {
+  const res = await execSql(
+    connectionString,
+    `SELECT convalidated FROM pg_constraint WHERE conname = $1`,
+    [constraintName],
+  );
+  return res.rows.length > 0 && res.rows[0].convalidated === true;
+}
+
+/**
+ * Check if a constraint exists.
+ */
+export async function constraintExists(
+  connectionString: string,
+  constraintName: string,
+): Promise<boolean> {
+  const res = await execSql(
+    connectionString,
+    `SELECT 1 FROM pg_constraint WHERE conname = $1`,
+    [constraintName],
+  );
+  return res.rowCount !== null && res.rowCount > 0;
+}
+
+/**
+ * Check if a column is NOT NULL.
+ */
+export async function columnIsNotNull(
+  connectionString: string,
+  tableName: string,
+  columnName: string,
+): Promise<boolean> {
+  const res = await execSql(
+    connectionString,
+    `SELECT is_nullable FROM information_schema.columns
+     WHERE table_schema = 'public' AND table_name = $1 AND column_name = $2`,
+    [tableName, columnName],
+  );
+  return res.rows.length > 0 && res.rows[0].is_nullable === "NO";
+}
+
+/**
  * Lifecycle helper for tests using the app's module-level pool (executor, scaffold, cli).
  * Registers vitest beforeEach/afterEach hooks internally.
  * Returns a mutable context object populated before each test.

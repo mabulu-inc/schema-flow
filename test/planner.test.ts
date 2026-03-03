@@ -53,10 +53,14 @@ describe("planner", () => {
     const structureSql = plan.structureOps.map((o) => o.sql).join("\n");
     expect(structureSql).not.toContain("FOREIGN KEY");
 
-    // FK phase should have the constraint
+    // FK phase should have the constraint with NOT VALID
     expect(plan.foreignKeyOps.length).toBeGreaterThan(0);
     expect(plan.foreignKeyOps[0].sql).toContain("FOREIGN KEY");
     expect(plan.foreignKeyOps[0].sql).toContain("CASCADE");
+    expect(plan.foreignKeyOps[0].sql).toContain("NOT VALID");
+
+    // Validate phase should have VALIDATE CONSTRAINT
+    expect(plan.validateOps.length).toBeGreaterThan(0);
   });
 
   it("plans ADD COLUMN for a new column on an existing table", async () => {
@@ -182,7 +186,7 @@ describe("planner", () => {
     expect(plan.blocked).toHaveLength(0);
   });
 
-  it("blocks SET NOT NULL as destructive (can fail with existing NULLs)", async () => {
+  it("SET NOT NULL uses safe 4-step pattern (not blocked)", async () => {
     await ctx.client.query(`CREATE TABLE items (id serial PRIMARY KEY, name text)`);
 
     const desired: TableSchema[] = [
@@ -197,10 +201,14 @@ describe("planner", () => {
 
     const plan = await buildPlan(ctx.client, desired, "public");
 
-    // SET NOT NULL is destructive
+    // SET NOT NULL should NOT be blocked — it uses the safe 4-step pattern
     const setNotNullBlocked = plan.blocked.find((o) => o.sql.includes("SET NOT NULL"));
-    expect(setNotNullBlocked).toBeDefined();
-    expect(setNotNullBlocked!.destructive).toBe(true);
+    expect(setNotNullBlocked).toBeUndefined();
+
+    // Should have a CHECK NOT VALID in structure phase
+    const checkOp = plan.structureOps.find((o) => o.type === "add_check_not_valid");
+    expect(checkOp).toBeDefined();
+    expect(checkOp!.destructive).toBe(false);
   });
 
   it("allows DROP NOT NULL as safe (widening nullability)", async () => {
@@ -569,6 +577,174 @@ describe("planner", () => {
     expect(policyOps).toHaveLength(0);
   });
 
+  // ─── ZDM Feature Tests ──────────────────────────────────────────────────
+
+  it("FK ops produce NOT VALID + VALIDATE two-step", async () => {
+    const desired: TableSchema[] = [
+      {
+        table: "authors",
+        columns: [{ name: "id", type: "serial", primary_key: true }],
+      },
+      {
+        table: "books",
+        columns: [
+          { name: "id", type: "serial", primary_key: true },
+          {
+            name: "author_id",
+            type: "integer",
+            references: { table: "authors", column: "id", on_delete: "CASCADE" },
+          },
+        ],
+      },
+    ];
+
+    const plan = await buildPlan(ctx.client, desired, "public");
+
+    // FK phase should have NOT VALID
+    const fkOps = plan.foreignKeyOps;
+    expect(fkOps.length).toBeGreaterThan(0);
+    expect(fkOps[0].sql).toContain("NOT VALID");
+    expect(fkOps[0].type).toBe("add_foreign_key_not_valid");
+
+    // Validate phase should have VALIDATE CONSTRAINT
+    const validateOps = plan.validateOps;
+    expect(validateOps.length).toBeGreaterThan(0);
+    const validateFk = validateOps.find((o) => o.type === "validate_constraint" && o.sql.includes("fk_books_author_id_authors"));
+    expect(validateFk).toBeDefined();
+    expect(validateFk!.sql).toContain("VALIDATE CONSTRAINT");
+  });
+
+  it("unvalidated FK produces only VALIDATE op", async () => {
+    // Create tables and add FK with NOT VALID
+    await ctx.client.query(`CREATE TABLE authors (id serial PRIMARY KEY)`);
+    await ctx.client.query(`CREATE TABLE books (id serial PRIMARY KEY, author_id integer)`);
+    await ctx.client.query(
+      `ALTER TABLE books ADD CONSTRAINT fk_books_author_id_authors FOREIGN KEY (author_id) REFERENCES authors(id) NOT VALID`,
+    );
+
+    const desired: TableSchema[] = [
+      {
+        table: "authors",
+        columns: [{ name: "id", type: "serial", primary_key: true }],
+      },
+      {
+        table: "books",
+        columns: [
+          { name: "id", type: "serial", primary_key: true },
+          {
+            name: "author_id",
+            type: "integer",
+            references: { table: "authors", column: "id" },
+          },
+        ],
+      },
+    ];
+
+    const plan = await buildPlan(ctx.client, desired, "public");
+
+    // Should NOT add a new FK (it already exists)
+    const addFkOps = plan.foreignKeyOps.filter((o) => o.type === "add_foreign_key_not_valid");
+    expect(addFkOps).toHaveLength(0);
+
+    // Should have only a VALIDATE op
+    const validateOps = plan.validateOps.filter(
+      (o) => o.type === "validate_constraint" && o.sql.includes("fk_books_author_id_authors"),
+    );
+    expect(validateOps).toHaveLength(1);
+  });
+
+  it("SET NOT NULL uses 4-step pattern, all non-destructive", async () => {
+    await ctx.client.query(`CREATE TABLE items (id serial PRIMARY KEY, name text)`);
+
+    const desired: TableSchema[] = [
+      {
+        table: "items",
+        columns: [
+          { name: "id", type: "serial", primary_key: true },
+          { name: "name", type: "text" }, // NOT NULL by convention
+        ],
+      },
+    ];
+
+    const plan = await buildPlan(ctx.client, desired, "public");
+
+    // Should NOT be blocked (safe NOT NULL uses 4-step)
+    const blockedNotNull = plan.blocked.find((o) => o.sql.includes("SET NOT NULL"));
+    expect(blockedNotNull).toBeUndefined();
+
+    // Step 1: ADD CHECK ... NOT VALID in structure phase
+    const addCheck = plan.structureOps.find(
+      (o) => o.type === "add_check_not_valid" && o.sql.includes("chk_items_name_nn"),
+    );
+    expect(addCheck).toBeDefined();
+    expect(addCheck!.destructive).toBe(false);
+
+    // Steps 2-4 in validate phase
+    const validateGroup = plan.validateOps.filter((o) => o.group === "safe_not_null_items_name");
+    expect(validateGroup).toHaveLength(3);
+    // All non-destructive
+    expect(validateGroup.every((o) => !o.destructive)).toBe(true);
+  });
+
+  it("CHECK on existing table uses NOT VALID + VALIDATE", async () => {
+    await ctx.client.query(`CREATE TABLE products (id serial PRIMARY KEY, price integer NOT NULL)`);
+
+    const desired: TableSchema[] = [
+      {
+        table: "products",
+        columns: [
+          { name: "id", type: "serial", primary_key: true },
+          { name: "price", type: "integer" },
+        ],
+        checks: [{ name: "chk_positive_price", expression: "price > 0" }],
+      },
+    ];
+
+    const plan = await buildPlan(ctx.client, desired, "public");
+
+    // Should have NOT VALID check in structure
+    const addCheck = plan.structureOps.find(
+      (o) => o.type === "add_check_not_valid" && o.sql.includes("chk_positive_price"),
+    );
+    expect(addCheck).toBeDefined();
+    expect(addCheck!.sql).toContain("NOT VALID");
+
+    // Should have VALIDATE in validate phase
+    const validate = plan.validateOps.find(
+      (o) => o.type === "validate_constraint" && o.sql.includes("chk_positive_price"),
+    );
+    expect(validate).toBeDefined();
+  });
+
+  it("UNIQUE on existing column uses concurrent index + constraint using index", async () => {
+    await ctx.client.query(`CREATE TABLE users (id serial PRIMARY KEY, email varchar(255) NOT NULL)`);
+
+    const desired: TableSchema[] = [
+      {
+        table: "users",
+        columns: [
+          { name: "id", type: "serial", primary_key: true },
+          { name: "email", type: "varchar(255)", unique: true },
+        ],
+      },
+    ];
+
+    const plan = await buildPlan(ctx.client, desired, "public");
+
+    // Should have a concurrent unique index in structure phase
+    const idxOp = plan.structureOps.find((o) => o.type === "add_unique_index");
+    expect(idxOp).toBeDefined();
+    expect(idxOp!.sql).toContain("CREATE UNIQUE INDEX CONCURRENTLY");
+    expect(idxOp!.sql).toContain("idx_users_email_unique");
+
+    // Should have ADD CONSTRAINT USING INDEX in validate phase
+    const constraintOp = plan.validateOps.find(
+      (o) => o.sql.includes("UNIQUE USING INDEX"),
+    );
+    expect(constraintOp).toBeDefined();
+    expect(constraintOp!.sql).toContain("uq_users_email");
+  });
+
   it("plans multiple tables with correct FK ordering", async () => {
     const desired: TableSchema[] = [
       {
@@ -608,6 +784,9 @@ describe("planner", () => {
       expect(lastStructureIdx).toBeLessThan(firstFkIdx);
     }
 
+    // 2 FKs with NOT VALID
     expect(plan.foreignKeyOps).toHaveLength(2);
+    // 2 VALIDATE CONSTRAINT ops
+    expect(plan.validateOps).toHaveLength(2);
   });
 });

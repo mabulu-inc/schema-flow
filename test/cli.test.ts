@@ -54,6 +54,16 @@ describe("CLI", () => {
       const output = run("--help");
       expect(output).toContain("mixins");
     });
+
+    it("shows --lock-timeout in help", () => {
+      const output = run("--help");
+      expect(output).toContain("--lock-timeout");
+    });
+
+    it("shows --statement-timeout in help", () => {
+      const output = run("--help");
+      expect(output).toContain("--statement-timeout");
+    });
   });
 
   describe("init", () => {

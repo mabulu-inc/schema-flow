@@ -9,16 +9,7 @@ import type { TableSchema } from "../schema/types.js";
 import { getExistingTables, introspectTable, getExistingFunctions } from "../introspect/index.js";
 import { withClient } from "../core/db.js";
 import { logger } from "../core/logger.js";
-
-/** Generate a UTC timestamp string for filenames: YYYYMMDDHHMMSS */
-function utcTimestamp(): string {
-  const now = new Date();
-  return now
-    .toISOString()
-    .replace(/[-:T]/g, "")
-    .replace(/\.\d+Z/, "")
-    .slice(0, 14);
-}
+import { utcTimestamp } from "../core/files.js";
 
 /** Scaffold a pre-migration SQL script */
 export function scaffoldPre(config: SchemaFlowConfig, name: string): string {
