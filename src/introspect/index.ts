@@ -57,6 +57,7 @@ export interface DbFunction {
   routine_definition: string;
   parameter_list: string;
   security_type: string;
+  proretset: boolean;
 }
 
 export interface DbTrigger {
@@ -496,23 +497,26 @@ export async function getExistingFunctions(client: pg.PoolClient, pgSchema: stri
        r.external_language,
        r.routine_definition,
        r.security_type,
+       proc.proretset,
        COALESCE(
          string_agg(p.parameter_name || ' ' || p.data_type, ', ' ORDER BY p.ordinal_position),
          ''
        ) AS parameter_list
      FROM information_schema.routines r
+     JOIN pg_catalog.pg_proc proc
+       ON proc.proname = r.routine_name
+     JOIN pg_catalog.pg_namespace ns
+       ON proc.pronamespace = ns.oid AND ns.nspname = r.routine_schema
      LEFT JOIN information_schema.parameters p
        ON r.specific_name = p.specific_name AND p.parameter_mode = 'IN'
      WHERE r.routine_schema = $1
        AND r.routine_type = 'FUNCTION'
        AND r.routine_name NOT LIKE 'pg_%'
        AND NOT EXISTS (
-         SELECT 1 FROM pg_catalog.pg_proc proc
-         JOIN pg_catalog.pg_namespace ns ON proc.pronamespace = ns.oid
-         JOIN pg_catalog.pg_depend dep ON dep.objid = proc.oid AND dep.deptype = 'e'
-         WHERE ns.nspname = r.routine_schema AND proc.proname = r.routine_name
+         SELECT 1 FROM pg_catalog.pg_depend dep
+         WHERE dep.objid = proc.oid AND dep.deptype = 'e'
        )
-     GROUP BY r.routine_name, r.routine_type, r.data_type, r.external_language, r.routine_definition, r.security_type
+     GROUP BY r.routine_name, r.routine_type, r.data_type, r.external_language, r.routine_definition, r.security_type, proc.proretset
      ORDER BY r.routine_name`,
     [pgSchema],
   );

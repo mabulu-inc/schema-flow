@@ -186,4 +186,38 @@ describe("generateFromDb", () => {
     expect(filenames).not.toContain("_schema_flow_history.yaml");
     expect(filenames).toContain("real_table.yaml");
   });
+
+  it("generates SETOF return type for set-returning functions", async () => {
+    await execSql(
+      ctx.connectionString,
+      `CREATE TABLE sessions (
+        session_id text PRIMARY KEY,
+        user_id integer NOT NULL
+      )`,
+    );
+
+    await execSql(
+      ctx.connectionString,
+      `CREATE OR REPLACE FUNCTION get_active_sessions()
+       RETURNS SETOF record LANGUAGE plpgsql SECURITY DEFINER AS $$
+       BEGIN
+         RETURN QUERY SELECT session_id, user_id FROM sessions;
+       END;
+       $$`,
+    );
+
+    const config = resolveConfig({
+      connectionString: ctx.connectionString,
+      baseDir: ctx.project.baseDir,
+    });
+
+    await generateFromDb(config);
+
+    const fnFile = path.join(ctx.project.schemaDir, "fn_get_active_sessions.yaml");
+    expect(existsSync(fnFile)).toBe(true);
+
+    const content = readFileSync(fnFile, "utf-8");
+    expect(content).toContain("SETOF record");
+    expect(content).not.toMatch(/returns: record\b/);
+  });
 });
