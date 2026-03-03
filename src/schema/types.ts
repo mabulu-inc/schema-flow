@@ -26,9 +26,17 @@ export interface ColumnDef {
     on_update?: "CASCADE" | "SET NULL" | "SET DEFAULT" | "RESTRICT" | "NO ACTION";
     /** Whether the FK constraint is validated (true) or NOT VALID (false). Populated by introspection. */
     validated?: boolean;
+    /** Whether the FK constraint is deferrable */
+    deferrable?: boolean;
+    /** Whether the FK constraint is initially deferred */
+    initially_deferred?: boolean;
   };
   /** Expand/contract: column rename/transform via dual-write trigger */
   expand?: ExpandDef;
+  /** SQL expression for a generated (stored) column */
+  generated?: string;
+  /** Column description/comment */
+  comment?: string;
 }
 
 export interface IndexDef {
@@ -36,6 +44,12 @@ export interface IndexDef {
   columns: string[];
   unique?: boolean;
   where?: string;
+  /** Index method: btree (default), gin, gist, hash, brin */
+  method?: string;
+  /** INCLUDE columns for covering indexes */
+  include?: string[];
+  /** Operator class (e.g., jsonb_path_ops) */
+  opclass?: string;
 }
 
 export interface CheckDef {
@@ -124,6 +138,8 @@ export interface TableSchema {
   policies?: PolicyDef[];
   /** Pre-migration checks: SQL assertions that must pass before migration */
   prechecks?: PrecheckDef[];
+  /** Table description/comment */
+  comment?: string;
 }
 
 export interface ForeignKeyAction {
@@ -145,4 +161,32 @@ export interface FunctionSchema {
   replace?: boolean;
   /** Security mode: "definer" generates SECURITY DEFINER, "invoker" is the default */
   security?: "definer" | "invoker";
+}
+
+export interface EnumSchema {
+  /** Enum type name */
+  name: string;
+  /** Ordered list of enum values */
+  values: string[];
+}
+
+export interface ExtensionsSchema {
+  /** List of PostgreSQL extensions to enable */
+  extensions: string[];
+}
+
+export interface ViewSchema {
+  /** View name */
+  name: string;
+  /** SQL query defining the view */
+  query: string;
+}
+
+export interface MaterializedViewSchema {
+  /** Materialized view name */
+  name: string;
+  /** SQL query defining the materialized view */
+  query: string;
+  /** Indexes on the materialized view */
+  indexes?: IndexDef[];
 }

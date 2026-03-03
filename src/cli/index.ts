@@ -4,9 +4,10 @@
 
 import { createRequire } from "node:module";
 import { resolveConfig, validateDirectories, type SchemaFlowConfig } from "../core/config.js";
+import { loadConfigFile, resolveEnvironmentConfig } from "../core/config-file.js";
 import { logger, LogLevel } from "../core/logger.js";
 import { testConnection, closePool } from "../core/db.js";
-import { runAll, runPre, runMigrate, runPost, runValidate } from "../executor/index.js";
+import { runAll, runPre, runMigrate, runPost, runValidate, runBaseline } from "../executor/index.js";
 import { scaffoldPre, scaffoldPost, generateFromDb, scaffoldInit } from "../scaffold/index.js";
 
 const require = createRequire(import.meta.url);
@@ -36,6 +37,7 @@ interface CliArgs {
     outputName?: string;
     skipChecks: boolean;
     apply: boolean;
+    env?: string;
   };
 }
 
@@ -63,6 +65,7 @@ function parseArgs(argv: string[]): CliArgs {
     outputName: getFlag(args, "--name"),
     skipChecks: args.includes("--skip-checks"),
     apply: args.includes("--apply"),
+    env: getFlag(args, "--env"),
   };
 
   return { command, subcommand, name, flags };
@@ -103,9 +106,10 @@ function printHelp(): void {
     ${"\x1b[36m"}contract${"\x1b[0m"}            Finalize expand/contract: drop old columns and triggers
     ${"\x1b[36m"}expand-status${"\x1b[0m"}       Show current expand/contract operation status
     ${"\x1b[36m"}generate${"\x1b[0m"}            Generate schema files from existing database
+    ${"\x1b[36m"}baseline${"\x1b[0m"}            Mark existing database as managed without running migrations
     ${"\x1b[36m"}new pre <name>${"\x1b[0m"}      Scaffold a new pre-migration script
     ${"\x1b[36m"}new post <name>${"\x1b[0m"}     Scaffold a new post-migration script
-    ${"\x1b[36m"}init${"\x1b[0m"}               Initialize directory structure (schema/, pre/, post/)
+    ${"\x1b[36m"}init${"\x1b[0m"}               Initialize directory structure (schema/, pre/, post/, repeatable/)
     ${"\x1b[36m"}status${"\x1b[0m"}              Show migration status and pending changes
     ${"\x1b[36m"}help${"\x1b[0m"}               Show this help message
 
@@ -122,6 +126,7 @@ function printHelp(): void {
     --name <name>              Output file name suffix (sql)
     --skip-checks              Skip pre-migration checks
     --apply                    Execute the operation (down)
+    --env <name>               Select environment from schema-flow.config.yaml
     --connection-string, --db  PostgreSQL connection string (or set DATABASE_URL)
     --dir                      Base directory (default: current directory)
     --schema                   PostgreSQL schema (default: public)
@@ -327,14 +332,34 @@ async function main(): Promise<void> {
   // All other commands need a database connection
   let config: SchemaFlowConfig;
   try {
+    // Load config file if present
+    const configBaseDir = args.flags.baseDir || process.cwd();
+    const configFile = loadConfigFile(configBaseDir);
+    let envConfig: Partial<SchemaFlowConfig> = {};
+
+    if (configFile && args.flags.env) {
+      const resolved = resolveEnvironmentConfig(configFile, args.flags.env);
+      if (!resolved) {
+        logger.error(`Environment "${args.flags.env}" not found in schema-flow.config.yaml`);
+        process.exit(1);
+      }
+      envConfig = {
+        connectionString: resolved.connectionString,
+        pgSchema: resolved.pgSchema,
+        lockTimeout: resolved.lockTimeout,
+        statementTimeout: resolved.statementTimeout,
+      };
+    }
+
+    // CLI flags take precedence over config file
     config = resolveConfig({
-      connectionString: args.flags.connectionString,
+      connectionString: args.flags.connectionString || envConfig.connectionString,
       baseDir: args.flags.baseDir,
-      pgSchema: args.flags.schema,
+      pgSchema: args.flags.schema || envConfig.pgSchema,
       dryRun: args.flags.dryRun || args.command === "plan",
       allowDestructive: args.flags.allowDestructive,
-      lockTimeout: args.flags.lockTimeout,
-      statementTimeout: args.flags.statementTimeout,
+      lockTimeout: args.flags.lockTimeout || envConfig.lockTimeout,
+      statementTimeout: args.flags.statementTimeout || envConfig.statementTimeout,
       skipChecks: args.flags.skipChecks,
     });
   } catch (err) {
@@ -567,6 +592,13 @@ async function main(): Promise<void> {
           allowDestructive: args.flags.allowDestructive,
         });
         if (!downResult.success) exitCode = 1;
+        break;
+      }
+
+      case "baseline": {
+        logger.banner("Baseline");
+        const baselineResult = await runBaseline(config);
+        if (!baselineResult.success) exitCode = 1;
         break;
       }
 

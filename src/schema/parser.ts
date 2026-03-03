@@ -4,7 +4,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { parse as parseYaml } from "yaml";
-import type { TableSchema, FunctionSchema, ColumnDef, TriggerDef, PolicyDef, MixinSchema, PrecheckDef, ExpandDef } from "./types.js";
+import type { TableSchema, FunctionSchema, ColumnDef, TriggerDef, PolicyDef, MixinSchema, PrecheckDef, ExpandDef, EnumSchema, ExtensionsSchema, ViewSchema, MaterializedViewSchema } from "./types.js";
 import { logger } from "../core/logger.js";
 
 /** Parse a single column definition from raw YAML */
@@ -21,8 +21,8 @@ export function parseColumnDef(col: Record<string, unknown>, filePath: string): 
     unique: col.unique ? Boolean(col.unique) : undefined,
     references: col.references
       ? {
-          table: (col.references as Record<string, string>).table,
-          column: (col.references as Record<string, string>).column,
+          table: (col.references as Record<string, unknown>).table as string,
+          column: (col.references as Record<string, unknown>).column as string,
           on_delete: (col.references as Record<string, string>).on_delete as ColumnDef["references"] extends {
             on_delete?: infer T;
           }
@@ -33,6 +33,8 @@ export function parseColumnDef(col: Record<string, unknown>, filePath: string): 
           }
             ? T
             : never,
+          deferrable: (col.references as Record<string, unknown>).deferrable ? Boolean((col.references as Record<string, unknown>).deferrable) : undefined,
+          initially_deferred: (col.references as Record<string, unknown>).initially_deferred ? Boolean((col.references as Record<string, unknown>).initially_deferred) : undefined,
         }
       : undefined,
     expand: col.expand
@@ -43,6 +45,8 @@ export function parseColumnDef(col: Record<string, unknown>, filePath: string): 
           batch_size: (col.expand as Record<string, unknown>).batch_size as number | undefined,
         }
       : undefined,
+    generated: col.generated !== undefined ? String(col.generated) : undefined,
+    comment: col.comment !== undefined ? String(col.comment) : undefined,
   };
 }
 
@@ -159,6 +163,10 @@ export function parseTableFile(filePath: string): TableSchema {
     schema.policies = raw.policies.map((p: Record<string, unknown>) => parsePolicyDef(p, filePath));
   }
 
+  if (raw.comment !== undefined) {
+    schema.comment = String(raw.comment);
+  }
+
   if (raw.prechecks && Array.isArray(raw.prechecks)) {
     schema.prechecks = raw.prechecks.map((pc: Record<string, unknown>) => {
       if (!pc.name || !pc.query) {
@@ -221,6 +229,83 @@ export function parseMixinFile(filePath: string): MixinSchema {
 
   logger.debug(`Parsed mixin: ${schema.mixin}`);
   return schema;
+}
+
+export function parseEnumFile(filePath: string): EnumSchema {
+  const content = readFileSync(filePath, "utf-8");
+  const raw = parseYaml(content);
+
+  if (!raw || typeof raw !== "object" || !raw.enum) {
+    throw new Error(`Invalid enum file: ${filePath} — expected "enum" key`);
+  }
+
+  if (!raw.values || !Array.isArray(raw.values) || raw.values.length === 0) {
+    throw new Error(`Enum file ${filePath} must define "values" as a non-empty array`);
+  }
+
+  return {
+    name: String(raw.enum),
+    values: raw.values.map(String),
+  };
+}
+
+export function parseExtensionsFile(filePath: string): ExtensionsSchema {
+  const content = readFileSync(filePath, "utf-8");
+  const raw = parseYaml(content);
+
+  if (!raw || typeof raw !== "object" || !raw.extensions) {
+    throw new Error(`Invalid extensions file: ${filePath} — expected "extensions" key`);
+  }
+
+  if (!Array.isArray(raw.extensions)) {
+    throw new Error(`Extensions file ${filePath} must define "extensions" as an array`);
+  }
+
+  return {
+    extensions: raw.extensions.map(String),
+  };
+}
+
+export function parseViewFile(filePath: string): ViewSchema {
+  const content = readFileSync(filePath, "utf-8");
+  const raw = parseYaml(content);
+
+  if (!raw || typeof raw !== "object" || !raw.view) {
+    throw new Error(`Invalid view file: ${filePath} — expected "view" key`);
+  }
+
+  if (!raw.query) {
+    throw new Error(`View file ${filePath} must define "query"`);
+  }
+
+  return {
+    name: String(raw.view),
+    query: String(raw.query),
+  };
+}
+
+export function parseMaterializedViewFile(filePath: string): MaterializedViewSchema {
+  const content = readFileSync(filePath, "utf-8");
+  const raw = parseYaml(content);
+
+  if (!raw || typeof raw !== "object" || !raw.materialized_view) {
+    throw new Error(`Invalid materialized view file: ${filePath} — expected "materialized_view" key`);
+  }
+
+  if (!raw.query) {
+    throw new Error(`Materialized view file ${filePath} must define "query"`);
+  }
+
+  const mv: MaterializedViewSchema = {
+    name: String(raw.materialized_view),
+    query: String(raw.query),
+  };
+
+  if (raw.indexes && Array.isArray(raw.indexes)) {
+    mv.indexes = raw.indexes;
+  }
+
+  return mv;
 }
 
 export function parseFunctionFile(filePath: string): FunctionSchema {

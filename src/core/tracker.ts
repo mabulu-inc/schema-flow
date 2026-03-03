@@ -10,14 +10,14 @@ export interface TrackedFile {
   file_path: string;
   file_hash: string;
   applied_at: string;
-  phase: "pre" | "schema" | "post";
+  phase: "pre" | "schema" | "post" | "repeatable";
 }
 
 const TRACKER_DDL = `
 CREATE TABLE IF NOT EXISTS %TABLE% (
   file_path  TEXT PRIMARY KEY,
   file_hash  TEXT NOT NULL,
-  phase      TEXT NOT NULL CHECK (phase IN ('pre', 'schema', 'post')),
+  phase      TEXT NOT NULL CHECK (phase IN ('pre', 'schema', 'post', 'repeatable')),
   applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 `;
@@ -33,6 +33,15 @@ export class FileTracker {
   async ensureTable(client: pg.PoolClient): Promise<void> {
     const ddl = TRACKER_DDL.replace("%TABLE%", this.table);
     await client.query(ddl);
+    // Migrate existing tables: add 'repeatable' to the phase CHECK constraint
+    await client.query(`
+      DO $$ BEGIN
+        ALTER TABLE ${this.table} DROP CONSTRAINT IF EXISTS ${this.table}_phase_check;
+        ALTER TABLE ${this.table} ADD CONSTRAINT ${this.table}_phase_check
+          CHECK (phase IN ('pre', 'schema', 'post', 'repeatable'));
+      EXCEPTION WHEN others THEN NULL;
+      END $$;
+    `);
     logger.debug(`Ensured tracking table: ${this.table}`);
   }
 
@@ -58,7 +67,7 @@ export class FileTracker {
   classifyFiles(
     filePaths: string[],
     tracked: Map<string, TrackedFile>,
-    _phase: "pre" | "schema" | "post",
+    _phase: "pre" | "schema" | "post" | "repeatable",
   ): { newFiles: string[]; changedFiles: string[]; unchangedFiles: string[] } {
     const newFiles: string[] = [];
     const changedFiles: string[] = [];
@@ -81,7 +90,7 @@ export class FileTracker {
   }
 
   /** Record a file as applied */
-  async recordFile(client: pg.PoolClient, filePath: string, phase: "pre" | "schema" | "post"): Promise<void> {
+  async recordFile(client: pg.PoolClient, filePath: string, phase: "pre" | "schema" | "post" | "repeatable"): Promise<void> {
     const hash = this.hashFile(filePath);
     await client.query(
       `INSERT INTO ${this.table} (file_path, file_hash, phase)

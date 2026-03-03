@@ -7,10 +7,10 @@ import { createHash } from "node:crypto";
 import path from "node:path";
 import pg from "pg";
 import type { SchemaFlowConfig } from "../core/config.js";
-import { buildPlan } from "../planner/index.js";
-import { parseTableFile, parseFunctionFile } from "../schema/parser.js";
+import { buildPlan, type PlanOptions } from "../planner/index.js";
+import { parseTableFile, parseFunctionFile, parseEnumFile, parseExtensionsFile, parseViewFile, parseMaterializedViewFile } from "../schema/parser.js";
 import { loadMixins, expandMixins } from "../schema/mixins.js";
-import type { FunctionSchema, TableSchema } from "../schema/types.js";
+import type { FunctionSchema, TableSchema, EnumSchema, ExtensionsSchema, ViewSchema, MaterializedViewSchema } from "../schema/types.js";
 import { FileTracker } from "../core/tracker.js";
 import { withClient, type ClientOptions } from "../core/db.js";
 import { logger } from "../core/logger.js";
@@ -185,15 +185,23 @@ export async function runMigrate(config: SchemaFlowConfig): Promise<ExecutionRes
       };
     }
 
-    // Separate function files from table files
-    const functionFiles = schemaFiles.filter((f) => {
+    // Classify schema files by type
+    const functionFiles: string[] = [];
+    const tableFiles: string[] = [];
+    const enumFiles: string[] = [];
+    const extensionFiles: string[] = [];
+    const viewFiles: string[] = [];
+    const mvFiles: string[] = [];
+
+    for (const f of schemaFiles) {
       const base = path.basename(f);
-      return base.startsWith("fn_");
-    });
-    const tableFiles = schemaFiles.filter((f) => {
-      const base = path.basename(f);
-      return !base.startsWith("fn_");
-    });
+      if (base.startsWith("fn_")) functionFiles.push(f);
+      else if (base.startsWith("enum_")) enumFiles.push(f);
+      else if (base === "extensions.yaml" || base === "extensions.yml") extensionFiles.push(f);
+      else if (base.startsWith("view_")) viewFiles.push(f);
+      else if (base.startsWith("mv_")) mvFiles.push(f);
+      else tableFiles.push(f);
+    }
 
     // Parse and apply function files first
     const parsedFunctions: FunctionSchema[] = [];
@@ -264,6 +272,70 @@ export async function runMigrate(config: SchemaFlowConfig): Promise<ExecutionRes
       };
     }
 
+    // Parse enum files
+    const parsedEnums: EnumSchema[] = [];
+    for (const f of enumFiles) {
+      try {
+        parsedEnums.push(parseEnumFile(f));
+      } catch (err) {
+        const msg = `Failed to parse enum ${f}: ${err instanceof Error ? err.message : String(err)}`;
+        errors.push(msg);
+        logger.error(msg);
+      }
+    }
+
+    // Parse extensions files
+    let parsedExtensions: ExtensionsSchema | undefined;
+    for (const f of extensionFiles) {
+      try {
+        const ext = parseExtensionsFile(f);
+        if (parsedExtensions) {
+          parsedExtensions.extensions.push(...ext.extensions);
+        } else {
+          parsedExtensions = ext;
+        }
+      } catch (err) {
+        const msg = `Failed to parse extensions ${f}: ${err instanceof Error ? err.message : String(err)}`;
+        errors.push(msg);
+        logger.error(msg);
+      }
+    }
+
+    // Parse view files
+    const parsedViews: ViewSchema[] = [];
+    for (const f of viewFiles) {
+      try {
+        parsedViews.push(parseViewFile(f));
+      } catch (err) {
+        const msg = `Failed to parse view ${f}: ${err instanceof Error ? err.message : String(err)}`;
+        errors.push(msg);
+        logger.error(msg);
+      }
+    }
+
+    // Parse materialized view files
+    const parsedMvs: MaterializedViewSchema[] = [];
+    for (const f of mvFiles) {
+      try {
+        parsedMvs.push(parseMaterializedViewFile(f));
+      } catch (err) {
+        const msg = `Failed to parse materialized view ${f}: ${err instanceof Error ? err.message : String(err)}`;
+        errors.push(msg);
+        logger.error(msg);
+      }
+    }
+
+    if (errors.length > 0) {
+      return {
+        phase: "migrate",
+        success: false,
+        operationsExecuted: 0,
+        errors,
+        dryRun: config.dryRun,
+        blockedDestructive: 0,
+      };
+    }
+
     // Expand mixins before building plan
     const mixinMap = await loadMixins(config.mixinsDir);
     if (mixinMap.size > 0) {
@@ -286,10 +358,16 @@ export async function runMigrate(config: SchemaFlowConfig): Promise<ExecutionRes
       }
     }
 
-    // Build migration plan — pass safety flag
-    const plan = await buildPlan(client, expandedSchemas, config.pgSchema, {
+    // Build migration plan — pass safety flag and new schema types
+    const planOptions: PlanOptions = {
       allowDestructive: config.allowDestructive,
-    });
+    };
+    if (parsedEnums.length > 0) planOptions.enums = parsedEnums;
+    if (parsedExtensions) planOptions.extensions = parsedExtensions;
+    if (parsedViews.length > 0) planOptions.views = parsedViews;
+    if (parsedMvs.length > 0) planOptions.materializedViews = parsedMvs;
+
+    const plan = await buildPlan(client, expandedSchemas, config.pgSchema, planOptions);
 
     if (plan.operations.length === 0 && plan.blocked.length === 0) {
       logger.success("Database matches desired schema — nothing to do");
@@ -367,12 +445,13 @@ export async function runMigrate(config: SchemaFlowConfig): Promise<ExecutionRes
       // Structure ops in a transaction
       if (plan.structureOps.length > 0) {
         logger.step("MIGRATE", `Executing ${plan.structureOps.length} structure operations`);
-        // Note: CREATE INDEX CONCURRENTLY cannot run inside a transaction,
-        // so we separate index ops from other structure ops
+        // Note: CREATE INDEX CONCURRENTLY and ALTER TYPE ADD VALUE cannot run inside a transaction
         const indexOps = plan.structureOps.filter((o) => o.type === "add_index" || o.type === "add_unique_index");
         const backfillOps = plan.structureOps.filter((o) => o.type === "backfill_column");
+        const enumValueOps = plan.structureOps.filter((o) => o.type === "add_enum_value");
+        const dropIndexOps = plan.structureOps.filter((o) => o.type === "drop_index");
         const nonIndexOps = plan.structureOps.filter(
-          (o) => o.type !== "add_index" && o.type !== "add_unique_index" && o.type !== "backfill_column",
+          (o) => o.type !== "add_index" && o.type !== "add_unique_index" && o.type !== "backfill_column" && o.type !== "add_enum_value" && o.type !== "drop_index",
         );
 
         if (nonIndexOps.length > 0) {
@@ -388,6 +467,20 @@ export async function runMigrate(config: SchemaFlowConfig): Promise<ExecutionRes
 
         // Index ops outside transaction (CONCURRENTLY)
         for (const op of indexOps) {
+          logger.debug(`Executing: ${op.description}`);
+          await client.query(op.sql);
+          opsExecuted++;
+        }
+
+        // Drop index ops outside transaction (CONCURRENTLY)
+        for (const op of dropIndexOps) {
+          logger.debug(`Executing: ${op.description}`);
+          await client.query(op.sql);
+          opsExecuted++;
+        }
+
+        // Enum ADD VALUE ops outside transaction (PG requirement)
+        for (const op of enumValueOps) {
           logger.debug(`Executing: ${op.description}`);
           await client.query(op.sql);
           opsExecuted++;
@@ -707,6 +800,125 @@ async function runSqlScripts(config: SchemaFlowConfig, dir: string, phase: "pre"
   }, clientOpts);
 }
 
+export interface BaselineResult {
+  success: boolean;
+  filesRecorded: number;
+  errors: string[];
+}
+
+/** Mark all current schema files as applied without running any SQL */
+export async function runBaseline(config: SchemaFlowConfig): Promise<BaselineResult> {
+  logger.step("BASELINE", "Recording current schema state without executing migrations");
+  const errors: string[] = [];
+
+  const schemaFiles = await discoverSchemaFiles(config.schemaDir);
+  if (schemaFiles.length === 0) {
+    logger.info("No schema files found — nothing to baseline");
+    return { success: true, filesRecorded: 0, errors: [] };
+  }
+
+  const tracker = new FileTracker(config.historyTable);
+  const clientOpts = clientOptionsFromConfig(config);
+
+  return await withClient(config.connectionString, async (client) => {
+    await tracker.ensureTable(client);
+    await tracker.ensureRunsTable(client);
+
+    // Record all schema files as applied
+    let recorded = 0;
+    for (const f of schemaFiles) {
+      await tracker.recordFile(client, f, "schema");
+      recorded++;
+    }
+
+    // Record pre/post scripts too
+    const preScripts = await discoverScripts(config.preDir);
+    for (const f of preScripts) {
+      await tracker.recordFile(client, f, "pre");
+      recorded++;
+    }
+    const postScripts = await discoverScripts(config.postDir);
+    for (const f of postScripts) {
+      await tracker.recordFile(client, f, "post");
+      recorded++;
+    }
+
+    // Create a baseline run record
+    const runId = await tracker.startRun(client, [], null);
+    await tracker.completeRun(client, runId, 0);
+
+    logger.success(`Baseline complete — ${recorded} files recorded`);
+    return { success: true, filesRecorded: recorded, errors: [] };
+  }, clientOpts);
+}
+
+export interface RepeatableResult {
+  success: boolean;
+  filesExecuted: number;
+  errors: string[];
+}
+
+/** Execute repeatable SQL files that have changed since last run */
+export async function runRepeatables(config: SchemaFlowConfig): Promise<RepeatableResult> {
+  const { existsSync } = await import("node:fs");
+  if (!existsSync(config.repeatableDir)) {
+    return { success: true, filesExecuted: 0, errors: [] };
+  }
+
+  const scripts = await discoverScripts(config.repeatableDir);
+  if (scripts.length === 0) {
+    return { success: true, filesExecuted: 0, errors: [] };
+  }
+
+  const errors: string[] = [];
+  let executed = 0;
+
+  const tracker = new FileTracker(config.historyTable);
+  const clientOpts = clientOptionsFromConfig(config);
+
+  return await withClient(config.connectionString, async (client) => {
+    await tracker.ensureTable(client);
+    const tracked = await tracker.getTracked(client);
+
+    const { newFiles, changedFiles } = tracker.classifyFiles(scripts, tracked, "repeatable");
+
+    const toRun = [...newFiles, ...changedFiles].sort();
+    if (toRun.length === 0) {
+      return { success: true, filesExecuted: 0, errors: [] };
+    }
+
+    logger.step("REPEATABLE", `Executing ${toRun.length} repeatable script(s)`);
+
+    for (const scriptPath of toRun) {
+      const scriptName = path.relative(config.baseDir, scriptPath);
+      const sql = readFileSync(scriptPath, "utf-8").trim();
+
+      if (!sql) continue;
+
+      if (config.dryRun) {
+        logger.info(`  [DRY RUN] ${scriptName}`);
+        executed++;
+        continue;
+      }
+
+      try {
+        logger.info(`  Executing: ${scriptName}`);
+        await client.query(sql);
+        await tracker.recordFile(client, scriptPath, "repeatable");
+        executed++;
+        logger.success(`  Applied: ${scriptName}`);
+      } catch (err) {
+        const msg = `Repeatable script ${scriptName} failed: ${err instanceof Error ? err.message : String(err)}`;
+        errors.push(msg);
+        logger.error(msg);
+        break;
+      }
+    }
+
+    return { success: errors.length === 0, filesExecuted: executed, errors };
+  }, clientOpts);
+}
+
 /** Run all phases: pre → migrate → post */
 export async function runAll(config: SchemaFlowConfig): Promise<ExecutionResult[]> {
   const results: ExecutionResult[] = [];
@@ -724,6 +936,9 @@ export async function runAll(config: SchemaFlowConfig): Promise<ExecutionResult[
     logger.error("Migration failed — aborting (post-migration scripts will not run)");
     return results;
   }
+
+  // Run repeatable scripts (after migrate, before post)
+  await runRepeatables(config);
 
   const postResult = await runPost(config);
   results.push(postResult);

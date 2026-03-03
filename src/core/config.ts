@@ -17,6 +17,8 @@ export interface SchemaFlowConfig {
   postDir: string;
   /** Mixin definitions directory */
   mixinsDir: string;
+  /** Repeatable SQL scripts directory */
+  repeatableDir: string;
   /** PostgreSQL schema name (default: public) */
   pgSchema: string;
   /** Migration history table name */
@@ -64,6 +66,7 @@ export function resolveConfig(overrides: Partial<SchemaFlowConfig> = {}): Schema
   const preDir = path.resolve(baseDir, overrides.preDir || DEFAULTS.preDir);
   const postDir = path.resolve(baseDir, overrides.postDir || DEFAULTS.postDir);
   const mixinsDir = path.resolve(baseDir, "mixins");
+  const repeatableDir = path.resolve(baseDir, "repeatable");
 
   const allowDestructive =
     overrides.allowDestructive ?? (process.env.SCHEMA_FLOW_ALLOW_DESTRUCTIVE === "true" || false);
@@ -75,6 +78,7 @@ export function resolveConfig(overrides: Partial<SchemaFlowConfig> = {}): Schema
     preDir,
     postDir,
     mixinsDir,
+    repeatableDir,
     pgSchema: overrides.pgSchema || DEFAULTS.pgSchema,
     historyTable: overrides.historyTable || DEFAULTS.historyTable,
     dryRun: overrides.dryRun ?? false,

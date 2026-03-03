@@ -4,8 +4,8 @@
 import pg from "pg";
 import path from "node:path";
 import type { SchemaFlowConfig } from "../core/config.js";
-import type { TableSchema, ColumnDef } from "../schema/types.js";
-import { parseTableFile, parseFunctionFile } from "../schema/parser.js";
+import type { TableSchema, ColumnDef, EnumSchema, ViewSchema, MaterializedViewSchema } from "../schema/types.js";
+import { parseTableFile, parseFunctionFile, parseEnumFile, parseExtensionsFile, parseViewFile, parseMaterializedViewFile } from "../schema/parser.js";
 import { loadMixins, expandMixins } from "../schema/mixins.js";
 import { discoverSchemaFiles } from "../core/files.js";
 import { normalizeType } from "../planner/index.js";
@@ -14,11 +14,19 @@ import {
   getExistingTables,
   introspectTable,
   getExistingFunctions,
+  getExistingEnums,
+  getExistingExtensions,
+  getExistingViews,
+  getExistingMaterializedViews,
+  getTableIndexes,
+  parseIndexDefFull,
+  getTableComment,
+  getColumnComments,
 } from "../introspect/index.js";
 import type { FunctionSchema } from "../schema/types.js";
 
 export interface DriftItem {
-  category: "table" | "column" | "index" | "constraint" | "trigger" | "policy" | "rls" | "function";
+  category: "table" | "column" | "index" | "constraint" | "trigger" | "policy" | "rls" | "function" | "enum" | "extension" | "view" | "materialized_view" | "comment";
   direction: "extra_in_db" | "missing_from_db" | "mismatch";
   table?: string;
   name: string;
@@ -42,8 +50,24 @@ export async function detectDrift(config: SchemaFlowConfig): Promise<DriftReport
   const items: DriftItem[] = [];
 
   const schemaFiles = await discoverSchemaFiles(config.schemaDir);
-  const functionFiles = schemaFiles.filter((f) => path.basename(f).startsWith("fn_"));
-  const tableFiles = schemaFiles.filter((f) => !path.basename(f).startsWith("fn_"));
+
+  // Classify files
+  const functionFiles: string[] = [];
+  const tableFiles: string[] = [];
+  const enumFiles: string[] = [];
+  const extensionFiles: string[] = [];
+  const viewFiles: string[] = [];
+  const mvFiles: string[] = [];
+
+  for (const f of schemaFiles) {
+    const base = path.basename(f);
+    if (base.startsWith("fn_")) functionFiles.push(f);
+    else if (base.startsWith("enum_")) enumFiles.push(f);
+    else if (base === "extensions.yaml" || base === "extensions.yml") extensionFiles.push(f);
+    else if (base.startsWith("view_")) viewFiles.push(f);
+    else if (base.startsWith("mv_")) mvFiles.push(f);
+    else tableFiles.push(f);
+  }
 
   // Parse schemas
   const parsedSchemas = tableFiles.map((f) => parseTableFile(f));
@@ -54,6 +78,25 @@ export async function detectDrift(config: SchemaFlowConfig): Promise<DriftReport
   // Parse functions
   const parsedFunctions: FunctionSchema[] = functionFiles.map((f) => parseFunctionFile(f));
   const desiredFuncMap = new Map(parsedFunctions.map((f) => [f.name, f]));
+
+  // Parse enums
+  const parsedEnums: EnumSchema[] = enumFiles.map((f) => parseEnumFile(f));
+  const desiredEnumMap = new Map(parsedEnums.map((e) => [e.name, e]));
+
+  // Parse extensions
+  const desiredExtensions = new Set<string>();
+  for (const f of extensionFiles) {
+    const ext = parseExtensionsFile(f);
+    ext.extensions.forEach((e) => desiredExtensions.add(e));
+  }
+
+  // Parse views
+  const parsedViews: ViewSchema[] = viewFiles.map((f) => parseViewFile(f));
+  const desiredViewMap = new Map(parsedViews.map((v) => [v.name, v]));
+
+  // Parse materialized views
+  const parsedMvs: MaterializedViewSchema[] = mvFiles.map((f) => parseMaterializedViewFile(f));
+  const desiredMvMap = new Map(parsedMvs.map((v) => [v.name, v]));
 
   let tablesChecked = 0;
   let functionsChecked = 0;
@@ -94,6 +137,39 @@ export async function detectDrift(config: SchemaFlowConfig): Promise<DriftReport
 
       const current = await introspectTable(client, desired.table, config.pgSchema);
       diffTable(desired, current, items);
+
+      // Index diff
+      const dbIndexes = await getTableIndexes(client, desired.table, config.pgSchema);
+      diffTableIndexes(desired, dbIndexes.map((i) => i.indexdef), items);
+
+      // Comment diff
+      const tableComment = await getTableComment(client, desired.table, config.pgSchema);
+      if (desired.comment !== undefined && desired.comment !== tableComment) {
+        items.push({
+          category: "comment",
+          direction: "mismatch",
+          table: desired.table,
+          name: "table_comment",
+          description: `Table comment on "${desired.table}" differs`,
+          details: [{ field: "comment", expected: desired.comment, actual: tableComment || "(none)" }],
+        });
+      }
+      const colComments = await getColumnComments(client, desired.table, config.pgSchema);
+      for (const col of desired.columns) {
+        if (col.comment !== undefined) {
+          const actual = colComments.get(col.name) || null;
+          if (col.comment !== actual) {
+            items.push({
+              category: "comment",
+              direction: "mismatch",
+              table: desired.table,
+              name: col.name,
+              description: `Column comment on "${desired.table}.${col.name}" differs`,
+              details: [{ field: "comment", expected: col.comment, actual: actual || "(none)" }],
+            });
+          }
+        }
+      }
     }
 
     // Diff functions
@@ -120,6 +196,143 @@ export async function detectDrift(config: SchemaFlowConfig): Promise<DriftReport
           direction: "extra_in_db",
           name: fn.routine_name,
           description: `Function "${fn.routine_name}" exists in database but has no schema file`,
+        });
+      }
+    }
+
+    // Diff enums
+    const existingEnums = await getExistingEnums(client, config.pgSchema);
+    const existingEnumMap = new Map(existingEnums.map((e) => [e.name, e]));
+
+    for (const desired of parsedEnums) {
+      const existing = existingEnumMap.get(desired.name);
+      if (!existing) {
+        items.push({
+          category: "enum",
+          direction: "missing_from_db",
+          name: desired.name,
+          description: `Enum "${desired.name}" defined in YAML but does not exist in database`,
+        });
+      } else {
+        // Check values
+        const missingValues = desired.values.filter((v) => !existing.values.includes(v));
+        const extraValues = existing.values.filter((v) => !desired.values.includes(v));
+        if (missingValues.length > 0 || extraValues.length > 0) {
+          items.push({
+            category: "enum",
+            direction: "mismatch",
+            name: desired.name,
+            description: `Enum "${desired.name}" values differ`,
+            details: [
+              ...(missingValues.length > 0 ? [{ field: "missing_values", expected: missingValues.join(", "), actual: "(not in DB)" }] : []),
+              ...(extraValues.length > 0 ? [{ field: "extra_values", expected: "(not in YAML)", actual: extraValues.join(", ") }] : []),
+            ],
+          });
+        }
+      }
+    }
+    for (const existing of existingEnums) {
+      if (!desiredEnumMap.has(existing.name)) {
+        items.push({
+          category: "enum",
+          direction: "extra_in_db",
+          name: existing.name,
+          description: `Enum "${existing.name}" exists in database but has no schema file`,
+        });
+      }
+    }
+
+    // Diff extensions
+    const existingExtSet = new Set(await getExistingExtensions(client));
+    for (const ext of desiredExtensions) {
+      if (!existingExtSet.has(ext)) {
+        items.push({
+          category: "extension",
+          direction: "missing_from_db",
+          name: ext,
+          description: `Extension "${ext}" defined in YAML but not installed`,
+        });
+      }
+    }
+    for (const ext of existingExtSet) {
+      if (!desiredExtensions.has(ext) && desiredExtensions.size > 0) {
+        items.push({
+          category: "extension",
+          direction: "extra_in_db",
+          name: ext,
+          description: `Extension "${ext}" installed but not in schema file`,
+        });
+      }
+    }
+
+    // Diff views
+    const existingViews = await getExistingViews(client, config.pgSchema);
+    const existingViewMap = new Map(existingViews.map((v) => [v.name, v]));
+    for (const desired of parsedViews) {
+      const existing = existingViewMap.get(desired.name);
+      if (!existing) {
+        items.push({
+          category: "view",
+          direction: "missing_from_db",
+          name: desired.name,
+          description: `View "${desired.name}" defined in YAML but does not exist in database`,
+        });
+      } else {
+        const desiredNorm = desired.query.replace(/\s+/g, " ").trim();
+        const existingNorm = existing.query.replace(/\s+/g, " ").trim();
+        if (desiredNorm !== existingNorm) {
+          items.push({
+            category: "view",
+            direction: "mismatch",
+            name: desired.name,
+            description: `View "${desired.name}" query differs from database`,
+          });
+        }
+      }
+    }
+    for (const existing of existingViews) {
+      if (!desiredViewMap.has(existing.name)) {
+        items.push({
+          category: "view",
+          direction: "extra_in_db",
+          name: existing.name,
+          description: `View "${existing.name}" exists in database but has no schema file`,
+        });
+      }
+    }
+
+    // Diff materialized views
+    const existingMvs = await getExistingMaterializedViews(client, config.pgSchema);
+    const existingMvMap = new Map(existingMvs.map((v) => [v.name, v]));
+    for (const desired of parsedMvs) {
+      const existing = existingMvMap.get(desired.name);
+      if (!existing) {
+        items.push({
+          category: "materialized_view",
+          direction: "missing_from_db",
+          name: desired.name,
+          description: `Materialized view "${desired.name}" defined in YAML but does not exist in database`,
+        });
+      } else {
+        const desiredNorm = desired.query.replace(/\s+/g, " ").trim();
+        const existingNorm = existing.query.replace(/\s+/g, " ").trim();
+        if (desiredNorm !== existingNorm) {
+          items.push({
+            category: "materialized_view",
+            direction: "mismatch",
+            name: desired.name,
+            description: `Materialized view "${desired.name}" query differs from database`,
+          });
+        }
+      }
+    }
+    for (const existing of existingMvs) {
+      if (!desiredMvMap.has(existing.name)) {
+        items.push({
+          category: "materialized_view",
+          direction: "extra_in_db",
+          name: existing.name,
+          description: `Materialized view "${existing.name}" exists in database but has no schema file`,
         });
       }
     }
@@ -295,6 +508,49 @@ function diffTable(desired: TableSchema, current: TableSchema, items: DriftItem[
         table: tableName,
         name,
         description: `Policy "${name}" on "${tableName}" defined in YAML but not in database`,
+      });
+    }
+  }
+}
+
+function diffTableIndexes(desired: TableSchema, existingIndexDefs: string[], items: DriftItem[]): void {
+  const tableName = desired.table;
+  const desiredIndexes = desired.indexes || [];
+
+  // Parse existing indexes
+  const existing = existingIndexDefs
+    .map((def) => parseIndexDefFull(def))
+    .filter((i) => !i.name.endsWith("_pkey") && !i.name.startsWith("uq_"));
+
+  const existingByName = new Map(existing.map((i) => [i.name, i]));
+  const desiredByName = new Map<string, unknown>();
+  for (const idx of desiredIndexes) {
+    const name = idx.name || `idx_${tableName}_${idx.columns.join("_")}`;
+    desiredByName.set(name, idx);
+  }
+
+  // Extra indexes in DB
+  for (const [name] of existingByName) {
+    if (!desiredByName.has(name)) {
+      items.push({
+        category: "index",
+        direction: "extra_in_db",
+        table: tableName,
+        name,
+        description: `Index "${name}" on "${tableName}" exists in database but not in YAML`,
+      });
+    }
+  }
+
+  // Missing indexes from DB
+  for (const [name] of desiredByName) {
+    if (!existingByName.has(name)) {
+      items.push({
+        category: "index",
+        direction: "missing_from_db",
+        table: tableName,
+        name,
+        description: `Index "${name}" on "${tableName}" defined in YAML but not in database`,
       });
     }
   }

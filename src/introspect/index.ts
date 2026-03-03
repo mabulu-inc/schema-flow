@@ -2,7 +2,7 @@
 // Introspect the current PostgreSQL database state
 
 import pg from "pg";
-import type { TableSchema, ColumnDef, TriggerDef, PolicyDef } from "../schema/types.js";
+import type { TableSchema, ColumnDef, TriggerDef, PolicyDef, EnumSchema, ViewSchema, MaterializedViewSchema, IndexDef } from "../schema/types.js";
 
 export interface DbColumn {
   column_name: string;
@@ -413,6 +413,228 @@ export async function getExistingFunctions(client: pg.PoolClient, pgSchema: stri
     [pgSchema],
   );
   return res.rows;
+}
+
+// ─── Enum Introspection ──────────────────────────────────────────────────────
+
+export interface DbEnum {
+  typname: string;
+  enumlabel: string;
+  enumsortorder: number;
+}
+
+/** Get all user-defined enums in the schema */
+export async function getExistingEnums(client: pg.PoolClient, pgSchema: string): Promise<EnumSchema[]> {
+  const res = await client.query<DbEnum>(
+    `SELECT t.typname, e.enumlabel, e.enumsortorder
+     FROM pg_type t
+     JOIN pg_enum e ON t.oid = e.enumtypid
+     JOIN pg_namespace n ON t.typnamespace = n.oid
+     WHERE n.nspname = $1
+     ORDER BY t.typname, e.enumsortorder`,
+    [pgSchema],
+  );
+
+  const enumMap = new Map<string, string[]>();
+  for (const row of res.rows) {
+    if (!enumMap.has(row.typname)) enumMap.set(row.typname, []);
+    enumMap.get(row.typname)!.push(row.enumlabel);
+  }
+
+  return Array.from(enumMap.entries()).map(([name, values]) => ({ name, values }));
+}
+
+// ─── Extension Introspection ─────────────────────────────────────────────────
+
+/** Get all installed extensions */
+export async function getExistingExtensions(client: pg.PoolClient): Promise<string[]> {
+  const res = await client.query(
+    `SELECT extname FROM pg_extension WHERE extname <> 'plpgsql' ORDER BY extname`,
+  );
+  return res.rows.map((r) => r.extname);
+}
+
+// ─── View Introspection ──────────────────────────────────────────────────────
+
+export interface DbView {
+  viewname: string;
+  definition: string;
+}
+
+/** Get all views in the schema */
+export async function getExistingViews(client: pg.PoolClient, pgSchema: string): Promise<ViewSchema[]> {
+  const res = await client.query<DbView>(
+    `SELECT viewname, definition FROM pg_views WHERE schemaname = $1 ORDER BY viewname`,
+    [pgSchema],
+  );
+  return res.rows.map((r) => ({
+    name: r.viewname,
+    query: r.definition.replace(/;$/, "").trim(),
+  }));
+}
+
+// ─── Materialized View Introspection ─────────────────────────────────────────
+
+export interface DbMatView {
+  matviewname: string;
+  definition: string;
+}
+
+/** Get all materialized views in the schema */
+export async function getExistingMaterializedViews(client: pg.PoolClient, pgSchema: string): Promise<MaterializedViewSchema[]> {
+  const res = await client.query<DbMatView>(
+    `SELECT matviewname, definition FROM pg_matviews WHERE schemaname = $1 ORDER BY matviewname`,
+    [pgSchema],
+  );
+
+  const mvs: MaterializedViewSchema[] = [];
+  for (const row of res.rows) {
+    const mv: MaterializedViewSchema = {
+      name: row.matviewname,
+      query: row.definition.replace(/;$/, "").trim(),
+    };
+
+    // Get indexes on this materialized view
+    const idxRes = await client.query<DbIndex>(
+      `SELECT indexname, indexdef FROM pg_indexes WHERE schemaname = $1 AND tablename = $2`,
+      [pgSchema, row.matviewname],
+    );
+
+    if (idxRes.rows.length > 0) {
+      mv.indexes = idxRes.rows.map((idx) => parseIndexDef(idx.indexdef, row.matviewname));
+    }
+
+    mvs.push(mv);
+  }
+
+  return mvs;
+}
+
+// ─── Index Parsing ───────────────────────────────────────────────────────────
+
+export interface ParsedIndex {
+  name: string;
+  columns: string[];
+  unique: boolean;
+  method: string;
+  where?: string;
+  include?: string[];
+  opclass?: string;
+}
+
+/** Parse a pg_indexes indexdef string into a structured object */
+export function parseIndexDef(indexdef: string, _tableName: string): IndexDef {
+  const unique = /\bUNIQUE\b/i.test(indexdef);
+
+  // Extract method (USING btree/gin/gist/hash/brin)
+  const methodMatch = indexdef.match(/USING\s+(\w+)/i);
+  const method = methodMatch ? methodMatch[1].toLowerCase() : "btree";
+
+  // Extract columns from parentheses after USING method or ON table
+  const colMatch = indexdef.match(/\(([^)]+)\)/);
+  const colStr = colMatch ? colMatch[1] : "";
+  const columns = colStr.split(",").map((c) => c.trim());
+
+  // Extract WHERE clause
+  const whereMatch = indexdef.match(/WHERE\s+(.+)$/i);
+  const where = whereMatch ? whereMatch[1] : undefined;
+
+  // Extract INCLUDE
+  const includeMatch = indexdef.match(/INCLUDE\s+\(([^)]+)\)/i);
+  const include = includeMatch ? includeMatch[1].split(",").map((c) => c.trim()) : undefined;
+
+  // Extract index name
+  const nameMatch = indexdef.match(/INDEX\s+(?:CONCURRENTLY\s+)?(?:IF\s+NOT\s+EXISTS\s+)?"?(\w+)"?/i);
+  const name = nameMatch ? nameMatch[1] : undefined;
+
+  const idx: IndexDef = { columns };
+  if (name) idx.name = name;
+  if (unique) idx.unique = true;
+  if (method !== "btree") idx.method = method;
+  if (where) idx.where = where;
+  if (include) idx.include = include;
+
+  return idx;
+}
+
+/** Parse indexdef to a ParsedIndex with full details */
+export function parseIndexDefFull(indexdef: string): ParsedIndex {
+  const unique = /\bUNIQUE\b/i.test(indexdef);
+  const methodMatch = indexdef.match(/USING\s+(\w+)/i);
+  const method = methodMatch ? methodMatch[1].toLowerCase() : "btree";
+
+  const colMatch = indexdef.match(/\(([^)]+)\)/);
+  const colStr = colMatch ? colMatch[1] : "";
+  const columns = colStr.split(",").map((c) => c.trim());
+
+  const whereMatch = indexdef.match(/WHERE\s+(.+)$/i);
+  const where = whereMatch ? whereMatch[1] : undefined;
+
+  const includeMatch = indexdef.match(/INCLUDE\s+\(([^)]+)\)/i);
+  const include = includeMatch ? includeMatch[1].split(",").map((c) => c.trim()) : undefined;
+
+  const nameMatch = indexdef.match(/INDEX\s+(?:CONCURRENTLY\s+)?(?:IF\s+NOT\s+EXISTS\s+)?"?(\w+)"?/i);
+  const name = nameMatch ? nameMatch[1] : "unknown";
+
+  return { name, columns, unique, method, where, include };
+}
+
+// ─── Comment Introspection ───────────────────────────────────────────────────
+
+/** Get the comment on a table */
+export async function getTableComment(client: pg.PoolClient, tableName: string, pgSchema: string): Promise<string | null> {
+  const res = await client.query(
+    `SELECT obj_description(c.oid) AS comment
+     FROM pg_class c
+     JOIN pg_namespace n ON c.relnamespace = n.oid
+     WHERE n.nspname = $1 AND c.relname = $2`,
+    [pgSchema, tableName],
+  );
+  return res.rows.length > 0 ? res.rows[0].comment : null;
+}
+
+/** Get comments on all columns of a table */
+export async function getColumnComments(
+  client: pg.PoolClient,
+  tableName: string,
+  pgSchema: string,
+): Promise<Map<string, string>> {
+  const res = await client.query(
+    `SELECT a.attname, col_description(c.oid, a.attnum) AS comment
+     FROM pg_class c
+     JOIN pg_namespace n ON c.relnamespace = n.oid
+     JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped
+     WHERE n.nspname = $1 AND c.relname = $2 AND col_description(c.oid, a.attnum) IS NOT NULL`,
+    [pgSchema, tableName],
+  );
+  const map = new Map<string, string>();
+  for (const row of res.rows) {
+    map.set(row.attname, row.comment);
+  }
+  return map;
+}
+
+// ─── Generated Column Introspection ──────────────────────────────────────────
+
+/** Get generated column expressions for a table */
+export async function getGeneratedColumns(
+  client: pg.PoolClient,
+  tableName: string,
+  pgSchema: string,
+): Promise<Map<string, string>> {
+  const res = await client.query(
+    `SELECT column_name, generation_expression
+     FROM information_schema.columns
+     WHERE table_schema = $1 AND table_name = $2 AND is_generated = 'ALWAYS'`,
+    [pgSchema, tableName],
+  );
+  const map = new Map<string, string>();
+  for (const row of res.rows) {
+    if (row.generation_expression) {
+      map.set(row.column_name, row.generation_expression);
+    }
+  }
+  return map;
 }
 
 /** Resolve a column type from information_schema to a user-friendly string */

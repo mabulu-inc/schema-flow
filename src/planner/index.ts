@@ -3,8 +3,8 @@
 // Key design: CREATE TABLEs first (without FKs), then ALTER TABLEs for FKs last
 // Safety: destructive operations (drops, narrowing changes) are blocked by default
 
-import type { TableSchema, ColumnDef, IndexDef, CheckDef, TriggerDef, PolicyDef } from "../schema/types.js";
-import { introspectTable, getExistingTables, getTableConstraints } from "../introspect/index.js";
+import type { TableSchema, ColumnDef, IndexDef, CheckDef, TriggerDef, PolicyDef, EnumSchema, ExtensionsSchema, ViewSchema, MaterializedViewSchema } from "../schema/types.js";
+import { introspectTable, getExistingTables, getTableConstraints, getExistingEnums, getExistingExtensions, getExistingViews, getExistingMaterializedViews, getTableIndexes, parseIndexDefFull, getTableComment, getColumnComments, getGeneratedColumns, type ParsedIndex } from "../introspect/index.js";
 import { logger } from "../core/logger.js";
 import pg from "pg";
 
@@ -34,7 +34,17 @@ export type OperationType =
   | "create_dual_write_trigger"
   | "backfill_column"
   | "contract_column"
-  | "drop_dual_write_trigger";
+  | "drop_dual_write_trigger"
+  | "create_enum"
+  | "add_enum_value"
+  | "create_extension"
+  | "drop_extension"
+  | "create_view"
+  | "drop_view"
+  | "create_materialized_view"
+  | "drop_materialized_view"
+  | "refresh_materialized_view"
+  | "set_comment";
 
 export interface Operation {
   type: OperationType;
@@ -73,6 +83,14 @@ export interface MigrationPlan {
 export interface PlanOptions {
   /** If true, destructive operations are included in the plan. Otherwise they are blocked. */
   allowDestructive?: boolean;
+  /** Desired enum schemas */
+  enums?: EnumSchema[];
+  /** Desired extensions */
+  extensions?: ExtensionsSchema;
+  /** Desired views */
+  views?: ViewSchema[];
+  /** Desired materialized views */
+  materializedViews?: MaterializedViewSchema[];
 }
 
 export async function buildPlan(
@@ -86,6 +104,18 @@ export async function buildPlan(
   const desiredTableNames = new Set(desiredSchemas.map((s) => s.table));
   const allOps: Operation[] = [];
 
+  // Plan extensions (execute first)
+  if (options.extensions) {
+    const extOps = await planExtensions(client, options.extensions, pgSchema);
+    allOps.push(...extOps);
+  }
+
+  // Plan enums (before tables)
+  if (options.enums) {
+    const enumOps = await planEnums(client, options.enums, pgSchema);
+    allOps.push(...enumOps);
+  }
+
   for (const desired of desiredSchemas) {
     if (!existingTables.has(desired.table)) {
       // CREATE TABLE (without foreign keys — those come later)
@@ -96,6 +126,18 @@ export async function buildPlan(
       const alterOps = await planAlterTable(client, desired, pgSchema);
       allOps.push(...alterOps);
     }
+  }
+
+  // Plan views (after tables)
+  if (options.views) {
+    const viewOps = await planViews(client, options.views, pgSchema);
+    allOps.push(...viewOps);
+  }
+
+  // Plan materialized views (after tables)
+  if (options.materializedViews) {
+    const mvOps = await planMaterializedViews(client, options.materializedViews, pgSchema);
+    allOps.push(...mvOps);
   }
 
   // Detect tables in DB that have no corresponding schema file (orphan detection)
@@ -180,17 +222,20 @@ function planCreateTable(schema: TableSchema, pgSchema: string): Operation[] {
   for (const col of schema.columns) {
     let def = `  "${col.name}" ${col.type}`;
 
-    if (col.primary_key) def += " PRIMARY KEY";
-    if (col.unique) def += " UNIQUE";
-    if (col.nullable === false || col.primary_key) {
-      // PRIMARY KEY implies NOT NULL; for explicit NOT NULL
-      if (!col.primary_key) def += " NOT NULL";
-    } else if (col.nullable === true) {
-      // Nullable is the default, no need to add anything
-    } else if (!col.primary_key) {
-      def += " NOT NULL"; // Convention: NOT NULL by default
+    if (col.generated) {
+      def += ` GENERATED ALWAYS AS (${col.generated}) STORED`;
+    } else {
+      if (col.primary_key) def += " PRIMARY KEY";
+      if (col.unique) def += " UNIQUE";
+      if (col.nullable === false || col.primary_key) {
+        if (!col.primary_key) def += " NOT NULL";
+      } else if (col.nullable === true) {
+        // Nullable is the default, no need to add anything
+      } else if (!col.primary_key) {
+        def += " NOT NULL"; // Convention: NOT NULL by default
+      }
+      if (col.default !== undefined) def += ` DEFAULT ${col.default}`;
     }
-    if (col.default !== undefined) def += ` DEFAULT ${col.default}`;
 
     colDefs.push(def);
 
@@ -199,10 +244,12 @@ function planCreateTable(schema: TableSchema, pgSchema: string): Operation[] {
       const fkName = `fk_${schema.table}_${col.name}_${col.references.table}`;
       const onDelete = col.references.on_delete || "NO ACTION";
       const onUpdate = col.references.on_update || "NO ACTION";
+      const deferrable = col.references.deferrable ? " DEFERRABLE" : "";
+      const initiallyDeferred = col.references.initially_deferred ? " INITIALLY DEFERRED" : "";
       fkOps.push({
         type: "add_foreign_key_not_valid",
         table: schema.table,
-        sql: `ALTER TABLE "${pgSchema}"."${schema.table}" ADD CONSTRAINT "${fkName}" FOREIGN KEY ("${col.name}") REFERENCES "${pgSchema}"."${col.references.table}" ("${col.references.column}") ON DELETE ${onDelete} ON UPDATE ${onUpdate} NOT VALID;`,
+        sql: `ALTER TABLE "${pgSchema}"."${schema.table}" ADD CONSTRAINT "${fkName}" FOREIGN KEY ("${col.name}") REFERENCES "${pgSchema}"."${col.references.table}" ("${col.references.column}") ON DELETE ${onDelete} ON UPDATE ${onUpdate}${deferrable}${initiallyDeferred} NOT VALID;`,
         description: `Add FK ${schema.table}.${col.name} → ${col.references.table}.${col.references.column} (NOT VALID)`,
         phase: "foreign_key",
         destructive: false,
@@ -332,10 +379,12 @@ async function planAlterTable(client: pg.PoolClient, desired: TableSchema, pgSch
         const fkName = `fk_${desired.table}_${col.name}_${col.references.table}`;
         const onDelete = col.references.on_delete || "NO ACTION";
         const onUpdate = col.references.on_update || "NO ACTION";
+        const deferrable = col.references.deferrable ? " DEFERRABLE" : "";
+        const initiallyDeferred = col.references.initially_deferred ? " INITIALLY DEFERRED" : "";
         ops.push({
           type: "add_foreign_key_not_valid",
           table: desired.table,
-          sql: `ALTER TABLE "${pgSchema}"."${desired.table}" ADD CONSTRAINT "${fkName}" FOREIGN KEY ("${col.name}") REFERENCES "${pgSchema}"."${col.references.table}" ("${col.references.column}") ON DELETE ${onDelete} ON UPDATE ${onUpdate} NOT VALID;`,
+          sql: `ALTER TABLE "${pgSchema}"."${desired.table}" ADD CONSTRAINT "${fkName}" FOREIGN KEY ("${col.name}") REFERENCES "${pgSchema}"."${col.references.table}" ("${col.references.column}") ON DELETE ${onDelete} ON UPDATE ${onUpdate}${deferrable}${initiallyDeferred} NOT VALID;`,
           description: `Add FK ${desired.table}.${col.name} → ${col.references.table}.${col.references.column} (NOT VALID)`,
           phase: "foreign_key",
           destructive: false,
@@ -401,10 +450,12 @@ async function planAlterTable(client: pg.PoolClient, desired: TableSchema, pgSch
         // FK doesn't exist yet — add with NOT VALID + VALIDATE
         const onDelete = col.references.on_delete || "NO ACTION";
         const onUpdate = col.references.on_update || "NO ACTION";
+        const deferrable = col.references.deferrable ? " DEFERRABLE" : "";
+        const initiallyDeferred = col.references.initially_deferred ? " INITIALLY DEFERRED" : "";
         ops.push({
           type: "add_foreign_key_not_valid",
           table: desired.table,
-          sql: `ALTER TABLE "${pgSchema}"."${desired.table}" ADD CONSTRAINT "${fkName}" FOREIGN KEY ("${col.name}") REFERENCES "${pgSchema}"."${col.references.table}" ("${col.references.column}") ON DELETE ${onDelete} ON UPDATE ${onUpdate} NOT VALID;`,
+          sql: `ALTER TABLE "${pgSchema}"."${desired.table}" ADD CONSTRAINT "${fkName}" FOREIGN KEY ("${col.name}") REFERENCES "${pgSchema}"."${col.references.table}" ("${col.references.column}") ON DELETE ${onDelete} ON UPDATE ${onUpdate}${deferrable}${initiallyDeferred} NOT VALID;`,
           description: `Add FK ${desired.table}.${col.name} → ${col.references.table}.${col.references.column} (NOT VALID)`,
           phase: "foreign_key",
           destructive: false,
@@ -453,6 +504,16 @@ async function planAlterTable(client: pg.PoolClient, desired: TableSchema, pgSch
   // Policy diff
   const policyOps = planPolicyDiff(desired.table, desired.policies || [], current.policies || [], pgSchema);
   ops.push(...policyOps);
+
+  // Index diff
+  const indexOps = await planIndexDiff(client, desired.table, desired.indexes || [], pgSchema);
+  ops.push(...indexOps);
+
+  // Comment diff
+  const currentTableComment = await getTableComment(client, desired.table, pgSchema);
+  const currentColumnComments = await getColumnComments(client, desired.table, pgSchema);
+  const commentOps = planTableComments(desired.table, desired, pgSchema, currentTableComment, currentColumnComments);
+  ops.push(...commentOps);
 
   return ops;
 }
@@ -643,13 +704,16 @@ function planCheckDiff(
 function planCreateIndex(tableName: string, idx: IndexDef, pgSchema: string): Operation {
   const idxName = idx.name || `idx_${tableName}_${idx.columns.join("_")}`;
   const unique = idx.unique ? "UNIQUE " : "";
-  const cols = idx.columns.map((c) => `"${c}"`).join(", ");
+  const method = idx.method && idx.method !== "btree" ? ` USING ${idx.method}` : "";
+  const cols = formatIndexColumns(idx.columns);
+  const opclass = idx.opclass ? ` ${idx.opclass}` : "";
+  const include = idx.include ? ` INCLUDE (${idx.include.map((c) => `"${c}"`).join(", ")})` : "";
   const where = idx.where ? ` WHERE ${idx.where}` : "";
 
   return {
     type: "add_index",
     table: tableName,
-    sql: `CREATE ${unique}INDEX CONCURRENTLY IF NOT EXISTS "${idxName}" ON "${pgSchema}"."${tableName}" (${cols})${where};`,
+    sql: `CREATE ${unique}INDEX CONCURRENTLY IF NOT EXISTS "${idxName}" ON "${pgSchema}"."${tableName}"${method} (${cols}${opclass})${include}${where};`,
     description: `Create ${unique ? "unique " : ""}index ${idxName} on ${tableName}`,
     phase: "structure",
     destructive: false,
@@ -908,9 +972,13 @@ function planRLSDiff(
 
 function buildAddColumnSql(tableName: string, col: ColumnDef, pgSchema: string): string {
   let sql = `ALTER TABLE "${pgSchema}"."${tableName}" ADD COLUMN "${col.name}" ${col.type}`;
-  if (col.nullable === false) sql += " NOT NULL";
-  if (col.unique) sql += " UNIQUE";
-  if (col.default !== undefined) sql += ` DEFAULT ${col.default}`;
+  if (col.generated) {
+    sql += ` GENERATED ALWAYS AS (${col.generated}) STORED`;
+  } else {
+    if (col.nullable === false) sql += " NOT NULL";
+    if (col.unique) sql += " UNIQUE";
+    if (col.default !== undefined) sql += ` DEFAULT ${col.default}`;
+  }
   sql += ";";
   return sql;
 }
@@ -978,4 +1046,333 @@ function isSerialType(t: string): boolean {
 
 function isIntegerType(t: string): boolean {
   return ["integer", "bigint", "smallint", "int", "int4", "int8", "int2"].includes(t.toLowerCase());
+}
+
+// ─── Enum Planning ───────────────────────────────────────────────────────────
+
+async function planEnums(
+  client: pg.PoolClient,
+  desiredEnums: EnumSchema[],
+  pgSchema: string,
+): Promise<Operation[]> {
+  const ops: Operation[] = [];
+  const existingEnums = await getExistingEnums(client, pgSchema);
+  const existingMap = new Map(existingEnums.map((e) => [e.name, e]));
+
+  for (const desired of desiredEnums) {
+    const existing = existingMap.get(desired.name);
+    if (!existing) {
+      // Create new enum
+      const values = desired.values.map((v) => `'${v}'`).join(", ");
+      ops.push({
+        type: "create_enum",
+        sql: `CREATE TYPE "${pgSchema}"."${desired.name}" AS ENUM (${values});`,
+        description: `Create enum type ${desired.name}`,
+        phase: "structure",
+        destructive: false,
+      });
+    } else {
+      // Diff values — PG only supports ADD VALUE (no removes without drop+recreate)
+      for (const val of desired.values) {
+        if (!existing.values.includes(val)) {
+          ops.push({
+            type: "add_enum_value",
+            sql: `ALTER TYPE "${pgSchema}"."${desired.name}" ADD VALUE IF NOT EXISTS '${val}';`,
+            description: `Add value '${val}' to enum ${desired.name}`,
+            phase: "structure",
+            destructive: false,
+          });
+        }
+      }
+    }
+  }
+
+  return ops;
+}
+
+// ─── Extension Planning ──────────────────────────────────────────────────────
+
+async function planExtensions(
+  client: pg.PoolClient,
+  desired: ExtensionsSchema,
+  _pgSchema: string,
+): Promise<Operation[]> {
+  const ops: Operation[] = [];
+  const existing = new Set(await getExistingExtensions(client));
+
+  for (const ext of desired.extensions) {
+    if (!existing.has(ext)) {
+      ops.push({
+        type: "create_extension",
+        sql: `CREATE EXTENSION IF NOT EXISTS "${ext}";`,
+        description: `Create extension ${ext}`,
+        phase: "structure",
+        destructive: false,
+      });
+    }
+  }
+
+  return ops;
+}
+
+// ─── View Planning ───────────────────────────────────────────────────────────
+
+async function planViews(
+  client: pg.PoolClient,
+  desiredViews: ViewSchema[],
+  pgSchema: string,
+): Promise<Operation[]> {
+  const ops: Operation[] = [];
+  const existingViews = await getExistingViews(client, pgSchema);
+  const existingMap = new Map(existingViews.map((v) => [v.name, v]));
+
+  for (const desired of desiredViews) {
+    const existing = existingMap.get(desired.name);
+    if (!existing) {
+      ops.push({
+        type: "create_view",
+        sql: `CREATE OR REPLACE VIEW "${pgSchema}"."${desired.name}" AS ${desired.query};`,
+        description: `Create view ${desired.name}`,
+        phase: "structure",
+        destructive: false,
+      });
+    } else {
+      // Compare query text (normalized)
+      const desiredNorm = desired.query.replace(/\s+/g, " ").trim();
+      const existingNorm = existing.query.replace(/\s+/g, " ").trim();
+      if (desiredNorm !== existingNorm) {
+        ops.push({
+          type: "create_view",
+          sql: `CREATE OR REPLACE VIEW "${pgSchema}"."${desired.name}" AS ${desired.query};`,
+          description: `Update view ${desired.name}`,
+          phase: "structure",
+          destructive: false,
+        });
+      }
+    }
+  }
+
+  return ops;
+}
+
+// ─── Materialized View Planning ──────────────────────────────────────────────
+
+async function planMaterializedViews(
+  client: pg.PoolClient,
+  desiredMvs: MaterializedViewSchema[],
+  pgSchema: string,
+): Promise<Operation[]> {
+  const ops: Operation[] = [];
+  const existingMvs = await getExistingMaterializedViews(client, pgSchema);
+  const existingMap = new Map(existingMvs.map((v) => [v.name, v]));
+
+  for (const desired of desiredMvs) {
+    const existing = existingMap.get(desired.name);
+    if (!existing) {
+      // Create
+      ops.push({
+        type: "create_materialized_view",
+        sql: `CREATE MATERIALIZED VIEW "${pgSchema}"."${desired.name}" AS ${desired.query};`,
+        description: `Create materialized view ${desired.name}`,
+        phase: "structure",
+        destructive: false,
+      });
+      // Add indexes
+      if (desired.indexes) {
+        for (const idx of desired.indexes) {
+          const idxName = idx.name || `idx_${desired.name}_${idx.columns.join("_")}`;
+          const unique = idx.unique ? "UNIQUE " : "";
+          const method = idx.method && idx.method !== "btree" ? ` USING ${idx.method}` : "";
+          const cols = formatIndexColumns(idx.columns);
+          const where = idx.where ? ` WHERE ${idx.where}` : "";
+          ops.push({
+            type: "add_index",
+            sql: `CREATE ${unique}INDEX "${idxName}" ON "${pgSchema}"."${desired.name}"${method} (${cols})${where};`,
+            description: `Create index ${idxName} on materialized view ${desired.name}`,
+            phase: "structure",
+            destructive: false,
+          });
+        }
+      }
+    } else {
+      // Compare query
+      const desiredNorm = desired.query.replace(/\s+/g, " ").trim();
+      const existingNorm = existing.query.replace(/\s+/g, " ").trim();
+      if (desiredNorm !== existingNorm) {
+        // Must drop+recreate for mat views
+        ops.push({
+          type: "drop_materialized_view",
+          sql: `DROP MATERIALIZED VIEW IF EXISTS "${pgSchema}"."${desired.name}";`,
+          description: `Drop materialized view ${desired.name} for recreation`,
+          phase: "structure",
+          destructive: false,
+        });
+        ops.push({
+          type: "create_materialized_view",
+          sql: `CREATE MATERIALIZED VIEW "${pgSchema}"."${desired.name}" AS ${desired.query};`,
+          description: `Recreate materialized view ${desired.name}`,
+          phase: "structure",
+          destructive: false,
+        });
+        if (desired.indexes) {
+          for (const idx of desired.indexes) {
+            const idxName = idx.name || `idx_${desired.name}_${idx.columns.join("_")}`;
+            const unique = idx.unique ? "UNIQUE " : "";
+            const method = idx.method && idx.method !== "btree" ? ` USING ${idx.method}` : "";
+            const cols = formatIndexColumns(idx.columns);
+            const where = idx.where ? ` WHERE ${idx.where}` : "";
+            ops.push({
+              type: "add_index",
+              sql: `CREATE ${unique}INDEX "${idxName}" ON "${pgSchema}"."${desired.name}"${method} (${cols})${where};`,
+              description: `Create index ${idxName} on materialized view ${desired.name}`,
+              phase: "structure",
+              destructive: false,
+            });
+          }
+        }
+      }
+    }
+  }
+
+  return ops;
+}
+
+// ─── Index Diffing ───────────────────────────────────────────────────────────
+
+async function planIndexDiff(
+  client: pg.PoolClient,
+  tableName: string,
+  desiredIndexes: IndexDef[],
+  pgSchema: string,
+): Promise<Operation[]> {
+  const ops: Operation[] = [];
+  const dbIndexes = await getTableIndexes(client, tableName, pgSchema);
+
+  // Parse existing indexes into structured form
+  const existingParsed: ParsedIndex[] = dbIndexes.map((i) => parseIndexDefFull(i.indexdef));
+
+  // Skip PK indexes and constraint-backing indexes
+  // PK indexes typically have names like tablename_pkey
+  const existingFiltered = existingParsed.filter(
+    (i) => !i.name.endsWith("_pkey") && !i.name.startsWith("uq_"),
+  );
+
+  // Build maps by name
+  const existingByName = new Map(existingFiltered.map((i) => [i.name, i]));
+  const desiredByName = new Map<string, IndexDef>();
+  for (const idx of desiredIndexes) {
+    const name = idx.name || `idx_${tableName}_${idx.columns.join("_")}`;
+    desiredByName.set(name, idx);
+  }
+
+  // New indexes
+  for (const [name, idx] of desiredByName) {
+    if (!existingByName.has(name)) {
+      ops.push(planCreateIndex(tableName, { ...idx, name }, pgSchema));
+    } else {
+      // Check if changed
+      const existing = existingByName.get(name)!;
+      const desiredMethod = idx.method || "btree";
+      const changed =
+        existing.method !== desiredMethod ||
+        normalizeIndexColumns(existing.columns).join(",") !== normalizeIndexColumns(idx.columns).join(",") ||
+        Boolean(existing.unique) !== Boolean(idx.unique) ||
+        normalizeWhere(existing.where) !== normalizeWhere(idx.where);
+
+      if (changed) {
+        // Drop and recreate
+        ops.push({
+          type: "drop_index",
+          table: tableName,
+          sql: `DROP INDEX CONCURRENTLY IF EXISTS "${pgSchema}"."${name}";`,
+          description: `Drop index ${name} on ${tableName} for recreation`,
+          phase: "structure",
+          destructive: false,
+        });
+        ops.push(planCreateIndex(tableName, { ...idx, name }, pgSchema));
+      }
+    }
+  }
+
+  // Removed indexes (destructive)
+  for (const [name] of existingByName) {
+    if (!desiredByName.has(name)) {
+      ops.push({
+        type: "drop_index",
+        table: tableName,
+        sql: `DROP INDEX CONCURRENTLY IF EXISTS "${pgSchema}"."${name}";`,
+        description: `Drop index ${name} on ${tableName}`,
+        phase: "structure",
+        destructive: true,
+      });
+    }
+  }
+
+  return ops;
+}
+
+function normalizeIndexColumns(cols: string[]): string[] {
+  return cols.map((c) => c.replace(/^"(.*)"$/, "$1").trim().toLowerCase());
+}
+
+function normalizeWhere(w?: string): string {
+  return (w || "").replace(/\s+/g, " ").trim().toLowerCase();
+}
+
+// ─── Comment Planning ────────────────────────────────────────────────────────
+
+export function planTableComments(
+  tableName: string,
+  desired: TableSchema,
+  pgSchema: string,
+  currentTableComment: string | null,
+  currentColumnComments: Map<string, string>,
+): Operation[] {
+  const ops: Operation[] = [];
+  const qualifiedTable = `"${pgSchema}"."${tableName}"`;
+
+  // Table comment
+  if (desired.comment !== undefined && desired.comment !== currentTableComment) {
+    ops.push({
+      type: "set_comment",
+      table: tableName,
+      sql: `COMMENT ON TABLE ${qualifiedTable} IS '${desired.comment.replace(/'/g, "''")}';`,
+      description: `Set comment on table ${tableName}`,
+      phase: "structure",
+      destructive: false,
+    });
+  }
+
+  // Column comments
+  for (const col of desired.columns) {
+    if (col.comment !== undefined) {
+      const currentComment = currentColumnComments.get(col.name) || null;
+      if (col.comment !== currentComment) {
+        ops.push({
+          type: "set_comment",
+          table: tableName,
+          sql: `COMMENT ON COLUMN ${qualifiedTable}."${col.name}" IS '${col.comment.replace(/'/g, "''")}';`,
+          description: `Set comment on ${tableName}.${col.name}`,
+          phase: "structure",
+          destructive: false,
+        });
+      }
+    }
+  }
+
+  return ops;
+}
+
+// ─── Helper: Format index columns ────────────────────────────────────────────
+
+/** Check if a column reference is an expression (contains function calls, casts, etc.) */
+function isExpression(col: string): boolean {
+  return col.includes("(") || col.includes("::") || col.includes(" ");
+}
+
+/** Format columns for CREATE INDEX, quoting identifiers but not expressions */
+function formatIndexColumns(columns: string[]): string {
+  return columns
+    .map((c) => (isExpression(c) ? c : `"${c}"`))
+    .join(", ");
 }
