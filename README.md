@@ -712,36 +712,17 @@ Declare RLS policies directly on tables. Policies are diffed and managed like an
 | `permissive` | boolean | `true` | `false` for RESTRICTIVE policy |
 | `comment` | string | — | Policy description (`COMMENT ON POLICY`) |
 
-```yaml
-table: orders
-rls: true
-force_rls: true
+PostgreSQL combines policies as follows: all **PERMISSIVE** policies for a command are OR'd (any one passing is enough), and all **RESTRICTIVE** policies are AND'd on top (every one must pass). If a role has no matching policy for a command, that command is denied.
 
-columns:
-  - name: id
-    type: serial
-    primary_key: true
-  - name: user_id
-    type: integer
+#### Step 1: Extract the tenant boundary into a mixin
 
-policies:
-  - name: users_see_own_orders
-    for: SELECT
-    to: app_user
-    using: "user_id = get_current_user_id()"
-
-  - name: deny_suspended
-    for: ALL
-    permissive: false
-    using: "NOT is_suspended()"
-```
-
-**Mixin example (tenant isolation):**
+A RESTRICTIVE policy that every table inherits. No permissive policy can bypass it.
 
 ```yaml
 # schema-flow/mixins/tenant_isolation.yaml
 mixin: tenant_isolation
 rls: true
+force_rls: true
 
 columns:
   - name: tenant_id
@@ -750,11 +731,135 @@ columns:
 policies:
   - name: "{table}_tenant_isolation"
     for: ALL
+    permissive: false
     using: "tenant_id = current_setting('app.tenant_id')::uuid"
     check: "tenant_id = current_setting('app.tenant_id')::uuid"
 ```
 
-When a mixin sets `rls: true`, all tables using it inherit RLS. The table can override with `rls: false`. Policy names support `{table}` interpolation, just like triggers and indexes.
+`force_rls: true` ensures even the table owner (your migration role) is subject to RLS at runtime. Policy names support `{table}` interpolation — each table gets a uniquely-named constraint.
+
+#### Step 2: Define per-role policies on the table
+
+```yaml
+# schema-flow/schema/orders.yaml
+table: orders
+use: [tenant_isolation]
+
+columns:
+  - name: id
+    type: serial
+    primary_key: true
+  - name: user_id
+    type: integer
+  - name: amount
+    type: integer
+  - name: status
+    type: text
+    default: "'draft'"
+  - name: payment_method
+    type: text
+    nullable: true
+  - name: created_at
+    type: timestamptz
+    default: now()
+
+policies:
+  # Users: read and create their own orders, edit only drafts/pending
+  - name: users_select_own
+    for: SELECT
+    to: [app_user]
+    using: "user_id = current_setting('app.user_id')::int"
+
+  - name: users_insert_own
+    for: INSERT
+    to: [app_user]
+    check: "user_id = current_setting('app.user_id')::int"
+
+  - name: users_update_own
+    for: UPDATE
+    to: [app_user]
+    using: "user_id = current_setting('app.user_id')::int"
+    check: "status IN ('draft', 'pending')"
+
+  # Managers: full read/write within the tenant
+  - name: managers_select
+    for: SELECT
+    to: [app_manager]
+    using: "true"
+
+  - name: managers_update
+    for: UPDATE
+    to: [app_manager]
+    using: "true"
+    check: "true"
+
+  # Auditors: read-only
+  - name: auditors_select
+    for: SELECT
+    to: [app_auditor]
+    using: "true"
+
+  # Service role: unrestricted within tenant
+  - name: service_all
+    for: ALL
+    to: [app_service]
+    using: "true"
+    check: "true"
+```
+
+The mixin contributes `tenant_id`, `rls: true`, `force_rls: true`, and the RESTRICTIVE tenant isolation policy. The table adds role-specific PERMISSIVE policies on top.
+
+#### What each role can do
+
+Every operation must also pass the `tenant_isolation` RESTRICTIVE policy — no role can ever reach another tenant's rows.
+
+| Role | SELECT | INSERT | UPDATE | DELETE |
+| --- | --- | --- | --- | --- |
+| `app_user` | own orders | own orders | own draft/pending | denied |
+| `app_manager` | all in tenant | denied | all in tenant | denied |
+| `app_auditor` | all in tenant | denied | denied | denied |
+| `app_service` | all in tenant | all in tenant | all in tenant | all in tenant |
+
+A role with no matching PERMISSIVE policy for a command is denied — `app_auditor` has no INSERT/UPDATE/DELETE policies, so those commands return zero rows.
+
+#### Step 3: Column-level access
+
+RLS controls which **rows** a role can see. To control which **columns** a role can see, use column-level `GRANT` in a repeatable script:
+
+```sql
+-- schema-flow/repeatable/grants.sql
+
+-- Users: full column access (RLS restricts rows)
+GRANT SELECT, INSERT, UPDATE ON orders TO app_user;
+
+-- Managers: full column access
+GRANT SELECT, UPDATE ON orders TO app_manager;
+
+-- Auditors: read-only, payment details hidden
+GRANT SELECT (id, tenant_id, user_id, amount, status, created_at) ON orders TO app_auditor;
+
+-- Service: full access
+GRANT ALL ON orders TO app_service;
+```
+
+Column-level `GRANT` composes with RLS — `app_auditor` can only read the listed columns, and only for rows passing both the tenant isolation and `auditors_select` policies.
+
+For more complex masking (e.g., showing a redacted value instead of hiding the column entirely), use a view:
+
+```yaml
+# schema-flow/schema/view_orders_audit.yaml
+view: orders_audit
+query: |
+  SELECT id, tenant_id, user_id, amount, status,
+         '****' || right(payment_method, 4) AS payment_method,
+         created_at
+  FROM orders
+comment: "Audit view with masked payment details"
+```
+
+Then grant auditors access to the view instead of (or in addition to) the base table.
+
+Placing grants in `schema-flow/repeatable/` ensures they are reapplied whenever the file changes, keeping permissions in sync with schema changes.
 
 ### Mixins
 
