@@ -7,8 +7,13 @@
   "bin": {
     "schema-flow": "./dist/cli/index.js"
   },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
   "exports": {
-    ".": "./dist/index.js"
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
   },
   "files": [
     "dist",
@@ -68,5 +73,9 @@
   "repository": {
     "type": "git",
     "url": "https://github.com/mabulu-inc/schema-flow"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://npm.pkg.github.com"
   }
 }
