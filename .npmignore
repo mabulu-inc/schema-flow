@@ -1,0 +1,14 @@
+src/
+test/
+examples/
+scripts/
+coverage/
+.github/
+*.tgz
+.env
+.env.*
+.test-db-port
+tsconfig.json
+eslint.config.js
+vitest.config.ts
+.prettierrc
