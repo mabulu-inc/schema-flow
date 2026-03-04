@@ -511,41 +511,29 @@ export async function runMigrate(config: SchemaFlowConfig): Promise<ExecutionRes
               await retryOnTimeout(
                 async () => {
                   await client.query("BEGIN");
-                  for (const op of nonIndexOps) {
-                    const marker = op.destructive ? "[DESTRUCTIVE] " : "";
-                    logger.debug(`Executing: ${marker}${op.description}`);
-                    try {
-                      await client.query(op.sql);
-                    } catch (opErr) {
-                      const pgMsg = opErr instanceof Error ? opErr.message : String(opErr);
-                      throw new Error(`${op.description}\n  SQL: ${op.sql}\n  Error: ${pgMsg}`, { cause: opErr });
+                  try {
+                    for (const op of nonIndexOps) {
+                      const marker = op.destructive ? "[DESTRUCTIVE] " : "";
+                      logger.debug(`Executing: ${marker}${op.description}`);
+                      try {
+                        await client.query(op.sql);
+                      } catch (opErr) {
+                        const pgMsg = opErr instanceof Error ? opErr.message : String(opErr);
+                        throw new Error(`${op.description}\n  SQL: ${op.sql}\n  Error: ${pgMsg}`, { cause: opErr });
+                      }
                     }
+                    await client.query("COMMIT");
+                  } catch (err) {
+                    await client.query("ROLLBACK").catch(() => {});
+                    throw err;
                   }
-                  await client.query("COMMIT");
                 },
                 { label: "structure ops", maxRetries: config.maxRetries },
               );
               opsExecuted += nonIndexOps.length;
             }
 
-            // Index ops outside transaction (CONCURRENTLY)
-            for (const op of indexOps) {
-              await retryOnTimeout(
-                async () => {
-                  logger.debug(`Executing: ${op.description}`);
-                  try {
-                    await client.query(op.sql);
-                  } catch (opErr) {
-                    const pgMsg = opErr instanceof Error ? opErr.message : String(opErr);
-                    throw new Error(`${op.description}\n  SQL: ${op.sql}\n  Error: ${pgMsg}`, { cause: opErr });
-                  }
-                },
-                { label: `index: ${op.description}`, maxRetries: config.maxRetries },
-              );
-              opsExecuted++;
-            }
-
-            // Drop index ops outside transaction (CONCURRENTLY)
+            // Drop index ops outside transaction (CONCURRENTLY) — must run before creates
             for (const op of dropIndexOps) {
               await retryOnTimeout(
                 async () => {
@@ -558,6 +546,36 @@ export async function runMigrate(config: SchemaFlowConfig): Promise<ExecutionRes
                   }
                 },
                 { label: `drop index: ${op.description}`, maxRetries: config.maxRetries },
+              );
+              opsExecuted++;
+            }
+
+            // Index ops outside transaction (CONCURRENTLY)
+            for (const op of indexOps) {
+              // Drop any INVALID index with the same name (left by a prior failed CREATE INDEX CONCURRENTLY)
+              const idxMatch = op.sql.match(/INDEX\s+CONCURRENTLY\s+IF\s+NOT\s+EXISTS\s+"([^"]+)"/i);
+              if (idxMatch) {
+                const idxName = idxMatch[1];
+                const invalid = await client.query(
+                  `SELECT 1 FROM pg_index i JOIN pg_class c ON i.indexrelid = c.oid WHERE c.relname = $1 AND NOT i.indisvalid`,
+                  [idxName],
+                );
+                if (invalid.rowCount && invalid.rowCount > 0) {
+                  logger.warn(`Dropping INVALID index "${idxName}" before recreation`);
+                  await client.query(`DROP INDEX CONCURRENTLY IF EXISTS "${idxName}"`);
+                }
+              }
+              await retryOnTimeout(
+                async () => {
+                  logger.debug(`Executing: ${op.description}`);
+                  try {
+                    await client.query(op.sql);
+                  } catch (opErr) {
+                    const pgMsg = opErr instanceof Error ? opErr.message : String(opErr);
+                    throw new Error(`${op.description}\n  SQL: ${op.sql}\n  Error: ${pgMsg}`, { cause: opErr });
+                  }
+                },
+                { label: `index: ${op.description}`, maxRetries: config.maxRetries },
               );
               opsExecuted++;
             }
@@ -627,16 +645,21 @@ export async function runMigrate(config: SchemaFlowConfig): Promise<ExecutionRes
             await retryOnTimeout(
               async () => {
                 await client.query("BEGIN");
-                for (const op of plan.foreignKeyOps) {
-                  logger.debug(`Executing: ${op.description}`);
-                  try {
-                    await client.query(op.sql);
-                  } catch (opErr) {
-                    const pgMsg = opErr instanceof Error ? opErr.message : String(opErr);
-                    throw new Error(`${op.description}\n  SQL: ${op.sql}\n  Error: ${pgMsg}`, { cause: opErr });
+                try {
+                  for (const op of plan.foreignKeyOps) {
+                    logger.debug(`Executing: ${op.description}`);
+                    try {
+                      await client.query(op.sql);
+                    } catch (opErr) {
+                      const pgMsg = opErr instanceof Error ? opErr.message : String(opErr);
+                      throw new Error(`${op.description}\n  SQL: ${op.sql}\n  Error: ${pgMsg}`, { cause: opErr });
+                    }
                   }
+                  await client.query("COMMIT");
+                } catch (err) {
+                  await client.query("ROLLBACK").catch(() => {});
+                  throw err;
                 }
-                await client.query("COMMIT");
               },
               { label: "foreign key ops", maxRetries: config.maxRetries },
             );

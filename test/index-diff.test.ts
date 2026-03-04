@@ -31,6 +31,34 @@ describe("index diffing", () => {
       );
       expect(result.where).toContain("active");
     });
+
+    it("parses expression columns with nested parentheses", () => {
+      const result = parseIndexDefFull(
+        `CREATE UNIQUE INDEX uq_issues ON public.issues USING btree (COALESCE(plant_id, '0'::integer), scope, type)`,
+      );
+      expect(result.columns).toHaveLength(3);
+      expect(result.columns[0]).toContain("COALESCE");
+      expect(result.columns[0]).toContain(")");
+      expect(result.columns[1]).toBe("scope");
+      expect(result.columns[2]).toBe("type");
+      expect(result.unique).toBe(true);
+    });
+
+    it("parses single expression column", () => {
+      const result = parseIndexDefFull(`CREATE INDEX idx_lower ON public.users USING btree (lower(email))`);
+      expect(result.columns).toHaveLength(1);
+      expect(result.columns[0]).toBe("lower(email)");
+    });
+
+    it("parses deeply nested expressions", () => {
+      const result = parseIndexDefFull(
+        `CREATE INDEX idx_deep ON public.t USING btree (COALESCE(NULLIF(a, ''), 'default'), b)`,
+      );
+      expect(result.columns).toHaveLength(2);
+      expect(result.columns[0]).toContain("COALESCE");
+      expect(result.columns[0]).toContain("NULLIF");
+      expect(result.columns[1]).toBe("b");
+    });
   });
 
   describe("enhanced planCreateIndex", () => {

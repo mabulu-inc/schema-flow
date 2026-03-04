@@ -334,13 +334,20 @@ function planCreateTable(schema: TableSchema, pgSchema: string): Operation[] {
   }
 
   // Multi-column unique constraints
+  // Constraints with expression columns (COALESCE, casts, etc.) cannot use
+  // inline UNIQUE — they need a separate CREATE UNIQUE INDEX after the table.
+  const deferredUniqueConstraints: typeof schema.unique_constraints = [];
   if (schema.unique_constraints) {
     for (const uc of schema.unique_constraints) {
-      const ucCols = uc.columns.map((c) => `"${c}"`).join(", ");
-      if (uc.name) {
-        colDefs.push(`  CONSTRAINT "${uc.name}" UNIQUE (${ucCols})`);
+      if (uc.columns.some(isExpression)) {
+        deferredUniqueConstraints.push(uc);
       } else {
-        colDefs.push(`  UNIQUE (${ucCols})`);
+        const ucCols = uc.columns.map((c) => `"${c}"`).join(", ");
+        if (uc.name) {
+          colDefs.push(`  CONSTRAINT "${uc.name}" UNIQUE (${ucCols})`);
+        } else {
+          colDefs.push(`  UNIQUE (${ucCols})`);
+        }
       }
     }
   }
@@ -361,6 +368,20 @@ function planCreateTable(schema: TableSchema, pgSchema: string): Operation[] {
       const idxOp = planCreateIndex(schema.table, idx, pgSchema);
       ops.push(idxOp);
     }
+  }
+
+  // Deferred unique constraints with expression columns (emitted as CREATE UNIQUE INDEX)
+  for (const uc of deferredUniqueConstraints) {
+    const idxName = uc.name || `uq_${schema.table}_${uc.columns.join("_")}`;
+    const ucCols = formatIndexColumns(uc.columns);
+    ops.push({
+      type: "add_unique_index",
+      table: schema.table,
+      sql: `CREATE UNIQUE INDEX IF NOT EXISTS "${idxName}" ON "${pgSchema}"."${schema.table}" (${ucCols});`,
+      description: `Create unique index ${idxName} on ${schema.table}`,
+      phase: "structure",
+      destructive: false,
+    });
   }
 
   // Check constraints
@@ -1457,7 +1478,7 @@ async function planUniqueConstraintDiff(
     if (existingUniqueMap.has(constraintName)) continue;
 
     // Use concurrent index pattern for safe addition
-    const ucCols = uc.columns.map((c) => `"${c}"`).join(", ");
+    const ucCols = formatIndexColumns(uc.columns);
     const idxName = `idx_${tableName}_${uc.columns.join("_")}_unique`;
     ops.push({
       type: "add_unique_index",

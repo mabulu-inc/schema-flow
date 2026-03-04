@@ -9,6 +9,7 @@ import type {
   ViewSchema,
   MaterializedViewSchema,
   UniqueConstraintDef,
+  IndexDef,
 } from "../schema/types.js";
 import {
   parseTableFile,
@@ -178,10 +179,8 @@ export async function detectDrift(config: SchemaFlowConfig): Promise<DriftReport
       diffTableIndexes(desired, dbIndexes, items);
 
       // Multi-column unique constraint diff
-      if (desired.unique_constraints) {
-        const dbConstraintsForUc = await getTableConstraints(client, desired.table, config.pgSchema);
-        diffUniqueConstraints(desired, dbConstraintsForUc, items);
-      }
+      const dbConstraintsForUc = await getTableConstraints(client, desired.table, config.pgSchema);
+      diffUniqueConstraints(desired, dbConstraintsForUc, items);
 
       // Comment diff
       const tableComment = await getTableComment(client, desired.table, config.pgSchema);
@@ -314,6 +313,14 @@ export async function detectDrift(config: SchemaFlowConfig): Promise<DriftReport
         const yamlSecurity = fn.security || "invoker";
         if (yamlSecurity !== dbSecurity) {
           details.push({ field: "security", expected: yamlSecurity, actual: dbSecurity });
+        }
+        // Args comparison
+        if (fn.args !== undefined) {
+          const yamlArgs = (fn.args || "").replace(/\s+/g, " ").trim();
+          const dbArgs = (dbFn.parameter_list || "").replace(/\s+/g, " ").trim();
+          if (yamlArgs !== dbArgs) {
+            details.push({ field: "args", expected: yamlArgs || "(none)", actual: dbArgs || "(none)" });
+          }
         }
         if (fn.body && dbFn.routine_definition) {
           if (normalizeBody(fn.body) !== normalizeBody(dbFn.routine_definition)) {
@@ -514,6 +521,38 @@ export async function detectDrift(config: SchemaFlowConfig): Promise<DriftReport
           });
         }
 
+        // MV index diff
+        const desiredMvIndexes = desired.indexes || [];
+        const existingMvIndexes = existing.indexes || [];
+        const existingMvIdxByName = new Map(existingMvIndexes.map((i) => [i.name, i]));
+        const desiredMvIdxByName = new Map<string, IndexDef>();
+        for (const idx of desiredMvIndexes) {
+          const idxName = idx.name || `idx_${desired.name}_${idx.columns.join("_")}`;
+          desiredMvIdxByName.set(idxName, idx);
+        }
+        for (const [idxName] of existingMvIdxByName) {
+          if (idxName && !desiredMvIdxByName.has(idxName)) {
+            items.push({
+              category: "index",
+              direction: "extra_in_db",
+              table: desired.name,
+              name: idxName,
+              description: `Index "${idxName}" on MV "${desired.name}" exists in database but not in YAML`,
+            });
+          }
+        }
+        for (const [idxName] of desiredMvIdxByName) {
+          if (!existingMvIdxByName.has(idxName)) {
+            items.push({
+              category: "index",
+              direction: "missing_from_db",
+              table: desired.name,
+              name: idxName,
+              description: `Index "${idxName}" on MV "${desired.name}" defined in YAML but not in database`,
+            });
+          }
+        }
+
         // Materialized view comment drift
         if (desired.comment !== undefined) {
           const currentComment = await getMaterializedViewComment(client, desired.name, config.pgSchema);
@@ -648,19 +687,52 @@ function diffTable(desired: TableSchema, current: TableSchema, items: DriftItem[
       details.push({ field: "unique_name", expected: col.unique_name, actual: existing.unique_name });
     }
 
-    // FK constraint name
-    if (
-      col.references &&
-      existing.references &&
-      col.references.name &&
-      existing.references.name &&
-      col.references.name !== existing.references.name
-    ) {
-      details.push({ field: "fk_name", expected: col.references.name, actual: existing.references.name });
+    // Generated column comparison
+    const desiredGenerated = (col.generated || "").replace(/\s+/g, " ").trim();
+    const existingGenerated = (existing.generated || "").replace(/\s+/g, " ").trim();
+    if (desiredGenerated !== existingGenerated) {
+      details.push({
+        field: "generated",
+        expected: desiredGenerated || "(none)",
+        actual: existingGenerated || "(none)",
+      });
     }
 
-    // FK deferrable
+    // FK comparisons
     if (col.references && existing.references) {
+      // FK target table
+      if (col.references.table !== existing.references.table) {
+        details.push({
+          field: "fk_table",
+          expected: col.references.table,
+          actual: existing.references.table || "(none)",
+        });
+      }
+      // FK target column
+      if (col.references.column !== existing.references.column) {
+        details.push({
+          field: "fk_column",
+          expected: col.references.column,
+          actual: existing.references.column || "(none)",
+        });
+      }
+      // FK on_delete
+      const desiredOnDelete = (col.references.on_delete || "NO ACTION").toUpperCase();
+      const existingOnDelete = (existing.references.on_delete || "NO ACTION").toUpperCase();
+      if (desiredOnDelete !== existingOnDelete) {
+        details.push({ field: "on_delete", expected: desiredOnDelete, actual: existingOnDelete });
+      }
+      // FK on_update
+      const desiredOnUpdate = (col.references.on_update || "NO ACTION").toUpperCase();
+      const existingOnUpdate = (existing.references.on_update || "NO ACTION").toUpperCase();
+      if (desiredOnUpdate !== existingOnUpdate) {
+        details.push({ field: "on_update", expected: desiredOnUpdate, actual: existingOnUpdate });
+      }
+      // FK constraint name
+      if (col.references.name && existing.references.name && col.references.name !== existing.references.name) {
+        details.push({ field: "fk_name", expected: col.references.name, actual: existing.references.name });
+      }
+      // FK deferrable
       const desiredDeferrable = col.references.deferrable === true;
       const existingDeferrable = existing.references.deferrable === true;
       if (desiredDeferrable !== existingDeferrable) {
@@ -675,6 +747,10 @@ function diffTable(desired: TableSchema, current: TableSchema, items: DriftItem[
           actual: String(existingDeferred),
         });
       }
+    } else if (col.references && !existing.references) {
+      details.push({ field: "fk_table", expected: col.references.table, actual: "(no FK)" });
+    } else if (!col.references && existing.references) {
+      details.push({ field: "fk_table", expected: "(no FK)", actual: existing.references.table || "unknown" });
     }
 
     if (details.length > 0) {
@@ -716,7 +792,7 @@ function diffTable(desired: TableSchema, current: TableSchema, items: DriftItem[
       });
     }
   }
-  for (const [name] of desiredTriggers) {
+  for (const [name, desiredTrg] of desiredTriggers) {
     if (!currentTriggers.has(name)) {
       items.push({
         category: "trigger",
@@ -725,6 +801,40 @@ function diffTable(desired: TableSchema, current: TableSchema, items: DriftItem[
         name,
         description: `Trigger "${name}" on "${tableName}" defined in YAML but not in database`,
       });
+    } else {
+      // Compare trigger properties
+      const currentTrg = currentTriggers.get(name)!;
+      const trgDetails: DriftItem["details"] = [];
+      if (desiredTrg.timing !== currentTrg.timing) {
+        trgDetails.push({ field: "timing", expected: desiredTrg.timing, actual: currentTrg.timing });
+      }
+      const desiredEvents = [...desiredTrg.events].sort().join(", ");
+      const currentEvents = [...currentTrg.events].sort().join(", ");
+      if (desiredEvents !== currentEvents) {
+        trgDetails.push({ field: "events", expected: desiredEvents, actual: currentEvents });
+      }
+      if (desiredTrg.function !== currentTrg.function) {
+        trgDetails.push({ field: "function", expected: desiredTrg.function, actual: currentTrg.function });
+      }
+      if (desiredTrg.for_each !== currentTrg.for_each) {
+        trgDetails.push({ field: "for_each", expected: desiredTrg.for_each, actual: currentTrg.for_each });
+      }
+      // WHEN clause
+      const desiredWhen = (desiredTrg.when || "").replace(/\s+/g, " ").trim();
+      const currentWhen = (currentTrg.when || "").replace(/\s+/g, " ").trim();
+      if (desiredWhen !== currentWhen) {
+        trgDetails.push({ field: "when", expected: desiredWhen || "(none)", actual: currentWhen || "(none)" });
+      }
+      if (trgDetails.length > 0) {
+        items.push({
+          category: "trigger",
+          direction: "mismatch",
+          table: tableName,
+          name,
+          description: `Trigger "${name}" on "${tableName}" differs: ${trgDetails.map((d) => d.field).join(", ")}`,
+          details: trgDetails,
+        });
+      }
     }
   }
 
@@ -739,6 +849,20 @@ function diffTable(desired: TableSchema, current: TableSchema, items: DriftItem[
       name: "rls",
       description: `RLS on "${tableName}": expected ${desiredRls ? "enabled" : "disabled"}, actual ${currentRls ? "enabled" : "disabled"}`,
       details: [{ field: "rls", expected: String(desiredRls), actual: String(currentRls) }],
+    });
+  }
+
+  // force_rls diff
+  const desiredForceRls = desired.force_rls === true;
+  const currentForceRls = current.force_rls === true;
+  if (desiredForceRls !== currentForceRls) {
+    items.push({
+      category: "rls",
+      direction: "mismatch",
+      table: tableName,
+      name: "force_rls",
+      description: `FORCE RLS on "${tableName}": expected ${desiredForceRls ? "enabled" : "disabled"}, actual ${currentForceRls ? "enabled" : "disabled"}`,
+      details: [{ field: "force_rls", expected: String(desiredForceRls), actual: String(currentForceRls) }],
     });
   }
 
@@ -757,7 +881,7 @@ function diffTable(desired: TableSchema, current: TableSchema, items: DriftItem[
       });
     }
   }
-  for (const [name] of desiredPolicies) {
+  for (const [name, desiredPol] of desiredPolicies) {
     if (!currentPolicies.has(name)) {
       items.push({
         category: "policy",
@@ -766,6 +890,98 @@ function diffTable(desired: TableSchema, current: TableSchema, items: DriftItem[
         name,
         description: `Policy "${name}" on "${tableName}" defined in YAML but not in database`,
       });
+    } else {
+      // Compare policy properties
+      const currentPol = currentPolicies.get(name)!;
+      const polDetails: DriftItem["details"] = [];
+      if (desiredPol.for && currentPol.for && desiredPol.for !== currentPol.for) {
+        polDetails.push({ field: "for", expected: desiredPol.for, actual: currentPol.for });
+      }
+      // TO roles comparison
+      const desiredTo = (desiredPol.to || []).sort().join(", ") || "PUBLIC";
+      const currentTo = (currentPol.to || []).sort().join(", ") || "PUBLIC";
+      if (desiredTo !== currentTo) {
+        polDetails.push({ field: "to", expected: desiredTo, actual: currentTo });
+      }
+      // Permissive comparison
+      const desiredPermissive = desiredPol.permissive !== false;
+      const currentPermissive = currentPol.permissive !== false;
+      if (desiredPermissive !== currentPermissive) {
+        polDetails.push({
+          field: "permissive",
+          expected: String(desiredPermissive),
+          actual: String(currentPermissive),
+        });
+      }
+      if (desiredPol.using && currentPol.using) {
+        const dUsing = desiredPol.using.replace(/\s+/g, " ").trim();
+        const cUsing = currentPol.using.replace(/\s+/g, " ").trim();
+        if (dUsing !== cUsing) {
+          polDetails.push({ field: "using", expected: desiredPol.using, actual: currentPol.using });
+        }
+      }
+      if (desiredPol.check && currentPol.check) {
+        const dCheck = desiredPol.check.replace(/\s+/g, " ").trim();
+        const cCheck = currentPol.check.replace(/\s+/g, " ").trim();
+        if (dCheck !== cCheck) {
+          polDetails.push({ field: "check", expected: desiredPol.check, actual: currentPol.check });
+        }
+      }
+      if (polDetails.length > 0) {
+        items.push({
+          category: "policy",
+          direction: "mismatch",
+          table: tableName,
+          name,
+          description: `Policy "${name}" on "${tableName}" differs: ${polDetails.map((d) => d.field).join(", ")}`,
+          details: polDetails,
+        });
+      }
+    }
+  }
+
+  // Check constraints diff
+  const desiredChecks = desired.checks || [];
+  const currentChecks = current.checks || [];
+  const currentCheckMap = new Map(currentChecks.map((c) => [c.name, c]));
+  const desiredCheckMap = new Map(desiredChecks.map((c) => [c.name, c]));
+
+  for (const chk of currentChecks) {
+    if (chk.name && !desiredCheckMap.has(chk.name)) {
+      items.push({
+        category: "constraint",
+        direction: "extra_in_db",
+        table: tableName,
+        name: chk.name,
+        description: `Check constraint "${chk.name}" on "${tableName}" exists in database but not in YAML`,
+      });
+    }
+  }
+  for (const chk of desiredChecks) {
+    if (!chk.name) continue;
+    if (!currentCheckMap.has(chk.name)) {
+      items.push({
+        category: "constraint",
+        direction: "missing_from_db",
+        table: tableName,
+        name: chk.name,
+        description: `Check constraint "${chk.name}" on "${tableName}" defined in YAML but not in database`,
+      });
+    } else {
+      // Compare expression
+      const currentChk = currentCheckMap.get(chk.name)!;
+      const dExpr = chk.expression.replace(/\s+/g, " ").trim();
+      const cExpr = (currentChk.expression || "").replace(/\s+/g, " ").trim();
+      if (dExpr !== cExpr) {
+        items.push({
+          category: "constraint",
+          direction: "mismatch",
+          table: tableName,
+          name: chk.name,
+          description: `Check constraint "${chk.name}" on "${tableName}" expression differs`,
+          details: [{ field: "expression", expected: chk.expression, actual: currentChk.expression || "(none)" }],
+        });
+      }
     }
   }
 }
@@ -798,7 +1014,7 @@ function diffTableIndexes(desired: TableSchema, dbIndexes: DbIndex[], items: Dri
   }
 
   // Missing indexes from DB
-  for (const [name] of desiredByName) {
+  for (const [name, idx] of desiredByName) {
     if (!existingByName.has(name)) {
       items.push({
         category: "index",
@@ -807,6 +1023,42 @@ function diffTableIndexes(desired: TableSchema, dbIndexes: DbIndex[], items: Dri
         name,
         description: `Index "${name}" on "${tableName}" defined in YAML but not in database`,
       });
+    } else {
+      // Compare index properties for drift
+      const db = existingByName.get(name)!;
+      const desiredIdx = idx as IndexDef;
+      const diffs: string[] = [];
+      const desiredCols = desiredIdx.columns.map((c: string) => c.replace(/"/g, "")).join(", ");
+      const dbCols = db.columns.map((c: string) => c.replace(/"/g, "")).join(", ");
+      if (desiredCols !== dbCols) diffs.push(`columns: YAML(${desiredCols}) vs DB(${dbCols})`);
+      const desiredMethod = desiredIdx.method || "btree";
+      if (desiredMethod !== db.method) diffs.push(`method: YAML(${desiredMethod}) vs DB(${db.method})`);
+      if ((desiredIdx.unique || false) !== db.unique)
+        diffs.push(`unique: YAML(${desiredIdx.unique || false}) vs DB(${db.unique})`);
+      // WHERE clause comparison
+      const desiredWhere = (desiredIdx.where || "").replace(/\s+/g, " ").trim();
+      const dbWhere = (db.where || "").replace(/\s+/g, " ").trim();
+      if (desiredWhere !== dbWhere)
+        diffs.push(`where: YAML(${desiredWhere || "(none)"}) vs DB(${dbWhere || "(none)"})`);
+      // INCLUDE comparison
+      const desiredInclude = (desiredIdx.include || []).map((c: string) => c.replace(/"/g, "")).join(", ");
+      const dbInclude = (db.include || []).map((c: string) => c.replace(/"/g, "")).join(", ");
+      if (desiredInclude !== dbInclude)
+        diffs.push(`include: YAML(${desiredInclude || "(none)"}) vs DB(${dbInclude || "(none)"})`);
+      // Opclass comparison
+      const desiredOpclass = desiredIdx.opclass || "";
+      const dbOpclass = db.opclass || "";
+      if (desiredOpclass !== dbOpclass)
+        diffs.push(`opclass: YAML(${desiredOpclass || "(none)"}) vs DB(${dbOpclass || "(none)"})`);
+      if (diffs.length > 0) {
+        items.push({
+          category: "index",
+          direction: "mismatch",
+          table: tableName,
+          name,
+          description: `Index "${name}" on "${tableName}" differs: ${diffs.join("; ")}`,
+        });
+      }
     }
   }
 }
@@ -851,8 +1103,8 @@ function diffUniqueConstraints(
     }
   }
 
-  // Missing from DB
-  for (const [name] of desiredByName) {
+  // Missing from DB or column mismatch
+  for (const [name, uc] of desiredByName) {
     if (!existingUcMap.has(name)) {
       items.push({
         category: "constraint",
@@ -861,6 +1113,20 @@ function diffUniqueConstraints(
         name,
         description: `Unique constraint "${name}" on "${tableName}" defined in YAML but not in database`,
       });
+    } else {
+      // Compare columns
+      const desiredCols = uc.columns.join(", ");
+      const existingCols = existingUcMap.get(name)!.join(", ");
+      if (desiredCols !== existingCols) {
+        items.push({
+          category: "constraint",
+          direction: "mismatch",
+          table: tableName,
+          name,
+          description: `Unique constraint "${name}" on "${tableName}" columns differ`,
+          details: [{ field: "columns", expected: desiredCols, actual: existingCols }],
+        });
+      }
     }
   }
 }

@@ -9,7 +9,12 @@ const { Pool } = pg;
 const RETRYABLE_CODES = new Set(["55P03", "57014", "40001", "40P01"]);
 
 export function isRetryable(err: unknown): boolean {
-  return err instanceof Error && RETRYABLE_CODES.has((err as unknown as Record<string, unknown>).code as string);
+  if (!(err instanceof Error)) return false;
+  const code = (err as unknown as Record<string, unknown>).code as string | undefined;
+  if (code && RETRYABLE_CODES.has(code)) return true;
+  // Walk the cause chain — executor wraps pg errors in descriptive Errors
+  if (err.cause) return isRetryable(err.cause);
+  return false;
 }
 
 function sleep(ms: number): Promise<void> {

@@ -790,6 +790,84 @@ describe("planner", () => {
     expect(plan.validateOps).toHaveLength(2);
   });
 
+  it("handles expression columns in unique_constraints on new table", async () => {
+    const desired: TableSchema[] = [
+      {
+        table: "system_issues",
+        columns: [
+          { name: "id", type: "serial", primary_key: true },
+          { name: "plant_id", type: "integer", nullable: true },
+          { name: "scope", type: "text" },
+          { name: "type", type: "text" },
+        ],
+        unique_constraints: [
+          {
+            name: "uq_system_issues_scope_type",
+            columns: ["COALESCE(plant_id, '0')", "scope", "type"],
+          },
+        ],
+      },
+    ];
+
+    const plan = await buildPlan(ctx.client, desired, "public");
+
+    // The CREATE TABLE should NOT have an inline UNIQUE with expression columns
+    const createOp = plan.structureOps.find((o) => o.type === "create_table");
+    expect(createOp).toBeDefined();
+    expect(createOp!.sql).not.toContain("UNIQUE");
+
+    // Instead, a CREATE UNIQUE INDEX should be generated
+    const idxOp = plan.structureOps.find((o) => o.type === "add_unique_index");
+    expect(idxOp).toBeDefined();
+    expect(idxOp!.sql).toContain("CREATE UNIQUE INDEX");
+    // Expression columns should NOT be double-quoted
+    expect(idxOp!.sql).toContain("COALESCE(plant_id, '0')");
+    expect(idxOp!.sql).not.toContain('"COALESCE');
+    // Plain columns should still be quoted
+    expect(idxOp!.sql).toContain('"scope"');
+    expect(idxOp!.sql).toContain('"type"');
+  });
+
+  it("handles expression columns in unique_constraints on existing table", async () => {
+    await ctx.client.query(`
+      CREATE TABLE system_issues (
+        id serial PRIMARY KEY,
+        plant_id integer,
+        scope text,
+        type text
+      )
+    `);
+
+    const desired: TableSchema[] = [
+      {
+        table: "system_issues",
+        columns: [
+          { name: "id", type: "serial", primary_key: true },
+          { name: "plant_id", type: "integer", nullable: true },
+          { name: "scope", type: "text" },
+          { name: "type", type: "text" },
+        ],
+        unique_constraints: [
+          {
+            name: "uq_system_issues_scope_type",
+            columns: ["COALESCE(plant_id, '0')", "scope", "type"],
+          },
+        ],
+      },
+    ];
+
+    const plan = await buildPlan(ctx.client, desired, "public");
+
+    const idxOp = plan.structureOps.find((o) => o.type === "add_unique_index");
+    expect(idxOp).toBeDefined();
+    expect(idxOp!.sql).toContain("CREATE UNIQUE INDEX CONCURRENTLY");
+    // Expression columns should NOT be double-quoted
+    expect(idxOp!.sql).toContain("COALESCE(plant_id, '0')");
+    expect(idxOp!.sql).not.toContain('"COALESCE');
+    // Plain columns should be quoted
+    expect(idxOp!.sql).toContain('"scope"');
+  });
+
   it("orders CREATE TABLE before cross-table policies in structureOps", async () => {
     // Table B has a policy that references table A via subquery.
     // If B is listed before A, the policy must still come after A's CREATE TABLE.

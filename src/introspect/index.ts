@@ -316,6 +316,7 @@ export async function getTableIndexes(client: pg.PoolClient, tableName: string, 
      FROM pg_indexes pi
      JOIN pg_class ci ON ci.relname = pi.indexname AND ci.relkind = 'i'
      JOIN pg_namespace ni ON ci.relnamespace = ni.oid AND ni.nspname = pi.schemaname
+     JOIN pg_index idx ON idx.indexrelid = ci.oid AND idx.indisvalid = true
      LEFT JOIN pg_constraint con ON con.conindid = ci.oid
      WHERE pi.schemaname = $1 AND pi.tablename = $2`,
     [pgSchema, tableName],
@@ -642,29 +643,88 @@ export interface ParsedIndex {
   opclass?: string;
 }
 
-/** Parse a pg_indexes indexdef string into a structured object */
-export function parseIndexDef(indexdef: string, _tableName: string): IndexDef {
+/**
+ * Extract the content of the first balanced parenthesized group from `str`
+ * starting at or after `startPos`. Handles nested parentheses so expressions
+ * like `COALESCE(plant_id, '0')` are captured in full.
+ */
+function extractBalancedParens(str: string, startPos = 0): string {
+  const open = str.indexOf("(", startPos);
+  if (open === -1) return "";
+  let depth = 0;
+  for (let i = open; i < str.length; i++) {
+    if (str[i] === "(") depth++;
+    else if (str[i] === ")") {
+      depth--;
+      if (depth === 0) return str.slice(open + 1, i);
+    }
+  }
+  return str.slice(open + 1); // unbalanced — return what we have
+}
+
+/**
+ * Split a column list string on top-level commas, respecting nested parentheses.
+ * E.g. `"COALESCE(a, '0'), scope, type"` → `["COALESCE(a, '0')", "scope", "type"]`
+ */
+function splitColumns(colStr: string): string[] {
+  const cols: string[] = [];
+  let depth = 0;
+  let start = 0;
+  for (let i = 0; i < colStr.length; i++) {
+    if (colStr[i] === "(") depth++;
+    else if (colStr[i] === ")") depth--;
+    else if (colStr[i] === "," && depth === 0) {
+      cols.push(colStr.slice(start, i).trim());
+      start = i + 1;
+    }
+  }
+  cols.push(colStr.slice(start).trim());
+  return cols.filter((c) => c.length > 0);
+}
+
+/** Shared parsing logic for index definitions */
+function parseIndexDefCommon(indexdef: string) {
   const unique = /\bUNIQUE\b/i.test(indexdef);
 
   // Extract method (USING btree/gin/gist/hash/brin)
   const methodMatch = indexdef.match(/USING\s+(\w+)/i);
   const method = methodMatch ? methodMatch[1].toLowerCase() : "btree";
 
-  // Extract columns from parentheses after USING method or ON table
-  const colMatch = indexdef.match(/\(([^)]+)\)/);
-  const colStr = colMatch ? colMatch[1] : "";
-  const columns = colStr.split(",").map((c) => c.trim());
+  // Extract columns using balanced-paren extraction (handles expressions)
+  // Find the column list parens — they come after USING <method> or after ON <table>
+  const colStart = methodMatch ? methodMatch.index! + methodMatch[0].length : indexdef.indexOf(" ON ");
+  const colStr = extractBalancedParens(indexdef, colStart);
+  const rawColumns = splitColumns(colStr);
 
-  // Extract WHERE clause
-  const whereMatch = indexdef.match(/WHERE\s+(.+)$/i);
+  // Extract opclass from columns — PG renders e.g. "data jsonb_path_ops"
+  // Opclass is a trailing identifier ending in _ops on a simple column
+  let opclass: string | undefined;
+  const columns = rawColumns.map((col) => {
+    const opclassMatch = col.match(/^(.+?)\s+(\w+_ops)$/);
+    if (opclassMatch) {
+      opclass = opclassMatch[2];
+      return opclassMatch[1].trim();
+    }
+    return col;
+  });
+
+  // Extract WHERE clause (comes after the column list closing paren)
+  const whereMatch = indexdef.match(/\)\s+WHERE\s+(.+)$/i);
   const where = whereMatch ? whereMatch[1] : undefined;
 
-  // Extract INCLUDE
-  const includeMatch = indexdef.match(/INCLUDE\s+\(([^)]+)\)/i);
-  const include = includeMatch ? includeMatch[1].split(",").map((c) => c.trim()) : undefined;
+  // Extract INCLUDE using balanced parens
+  const includeIdx = indexdef.search(/\bINCLUDE\s*\(/i);
+  const include = includeIdx !== -1 ? splitColumns(extractBalancedParens(indexdef, includeIdx)) : undefined;
 
   // Extract index name
   const nameMatch = indexdef.match(/INDEX\s+(?:CONCURRENTLY\s+)?(?:IF\s+NOT\s+EXISTS\s+)?"?(\w+)"?/i);
+
+  return { unique, method, columns, where, include, opclass, nameMatch };
+}
+
+/** Parse a pg_indexes indexdef string into a structured object */
+export function parseIndexDef(indexdef: string, _tableName: string): IndexDef {
+  const { unique, method, columns, where, include, opclass, nameMatch } = parseIndexDefCommon(indexdef);
   const name = nameMatch ? nameMatch[1] : undefined;
 
   const idx: IndexDef = { columns };
@@ -673,30 +733,17 @@ export function parseIndexDef(indexdef: string, _tableName: string): IndexDef {
   if (method !== "btree") idx.method = method;
   if (where) idx.where = where;
   if (include) idx.include = include;
+  if (opclass) idx.opclass = opclass;
 
   return idx;
 }
 
 /** Parse indexdef to a ParsedIndex with full details */
 export function parseIndexDefFull(indexdef: string): ParsedIndex {
-  const unique = /\bUNIQUE\b/i.test(indexdef);
-  const methodMatch = indexdef.match(/USING\s+(\w+)/i);
-  const method = methodMatch ? methodMatch[1].toLowerCase() : "btree";
-
-  const colMatch = indexdef.match(/\(([^)]+)\)/);
-  const colStr = colMatch ? colMatch[1] : "";
-  const columns = colStr.split(",").map((c) => c.trim());
-
-  const whereMatch = indexdef.match(/WHERE\s+(.+)$/i);
-  const where = whereMatch ? whereMatch[1] : undefined;
-
-  const includeMatch = indexdef.match(/INCLUDE\s+\(([^)]+)\)/i);
-  const include = includeMatch ? includeMatch[1].split(",").map((c) => c.trim()) : undefined;
-
-  const nameMatch = indexdef.match(/INDEX\s+(?:CONCURRENTLY\s+)?(?:IF\s+NOT\s+EXISTS\s+)?"?(\w+)"?/i);
+  const { unique, method, columns, where, include, opclass, nameMatch } = parseIndexDefCommon(indexdef);
   const name = nameMatch ? nameMatch[1] : "unknown";
 
-  return { name, columns, unique, method, where, include };
+  return { name, columns, unique, method, where, include, opclass };
 }
 
 // ─── Comment Introspection ───────────────────────────────────────────────────
