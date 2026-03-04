@@ -493,34 +493,26 @@ export async function introspectTable(
 export async function getExistingFunctions(client: pg.PoolClient, pgSchema: string): Promise<DbFunction[]> {
   const res = await client.query<DbFunction>(
     `SELECT
-       r.routine_name,
-       r.routine_type,
-       r.data_type,
-       r.external_language,
-       r.routine_definition,
-       r.security_type,
+       proc.proname AS routine_name,
+       'FUNCTION' AS routine_type,
+       pg_catalog.format_type(proc.prorettype, NULL) AS data_type,
+       lang.lanname AS external_language,
+       proc.prosrc AS routine_definition,
+       CASE WHEN proc.prosecdef THEN 'DEFINER' ELSE 'INVOKER' END AS security_type,
        proc.proretset,
        pg_get_function_result(proc.oid) AS full_return_type,
-       COALESCE(
-         string_agg(p.parameter_name || ' ' || p.data_type, ', ' ORDER BY p.ordinal_position),
-         ''
-       ) AS parameter_list
-     FROM information_schema.routines r
-     JOIN pg_catalog.pg_proc proc
-       ON proc.proname = r.routine_name
-     JOIN pg_catalog.pg_namespace ns
-       ON proc.pronamespace = ns.oid AND ns.nspname = r.routine_schema
-     LEFT JOIN information_schema.parameters p
-       ON r.specific_name = p.specific_name AND p.parameter_mode = 'IN'
-     WHERE r.routine_schema = $1
-       AND r.routine_type = 'FUNCTION'
-       AND r.routine_name NOT LIKE 'pg_%'
+       COALESCE(pg_get_function_identity_arguments(proc.oid), '') AS parameter_list
+     FROM pg_catalog.pg_proc proc
+     JOIN pg_catalog.pg_namespace ns ON proc.pronamespace = ns.oid
+     JOIN pg_catalog.pg_language lang ON proc.prolang = lang.oid
+     WHERE ns.nspname = $1
+       AND proc.prokind = 'f'
+       AND proc.proname NOT LIKE 'pg_%'
        AND NOT EXISTS (
          SELECT 1 FROM pg_catalog.pg_depend dep
          WHERE dep.objid = proc.oid AND dep.deptype = 'e'
        )
-     GROUP BY r.routine_name, r.routine_type, r.data_type, r.external_language, r.routine_definition, r.security_type, proc.proretset, proc.oid
-     ORDER BY r.routine_name`,
+     ORDER BY proc.proname`,
     [pgSchema],
   );
   return res.rows;
