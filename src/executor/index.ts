@@ -273,7 +273,12 @@ export async function runMigrate(config: SchemaFlowConfig): Promise<ExecutionRes
               const securityClause = fn.security === "definer" ? " SECURITY DEFINER" : "";
               const sql = `CREATE ${replaceClause}FUNCTION ${fn.name}${argsClause} RETURNS ${fn.returns} LANGUAGE ${fn.language}${securityClause} AS $fn_body$\n${fn.body}\n$fn_body$;`;
               logger.debug(`Creating function: ${fn.name}`);
-              await client.query(sql);
+              try {
+                await client.query(sql);
+              } catch (fnErr) {
+                const pgMsg = fnErr instanceof Error ? fnErr.message : String(fnErr);
+                throw new Error(`Create function ${fn.name}\n  SQL: ${sql}\n  Error: ${pgMsg}`, { cause: fnErr });
+              }
             }
             // Apply function comments
             for (const fn of parsedFunctions) {
@@ -509,7 +514,12 @@ export async function runMigrate(config: SchemaFlowConfig): Promise<ExecutionRes
                   for (const op of nonIndexOps) {
                     const marker = op.destructive ? "[DESTRUCTIVE] " : "";
                     logger.debug(`Executing: ${marker}${op.description}`);
-                    await client.query(op.sql);
+                    try {
+                      await client.query(op.sql);
+                    } catch (opErr) {
+                      const pgMsg = opErr instanceof Error ? opErr.message : String(opErr);
+                      throw new Error(`${op.description}\n  SQL: ${op.sql}\n  Error: ${pgMsg}`, { cause: opErr });
+                    }
                   }
                   await client.query("COMMIT");
                 },
@@ -523,7 +533,12 @@ export async function runMigrate(config: SchemaFlowConfig): Promise<ExecutionRes
               await retryOnTimeout(
                 async () => {
                   logger.debug(`Executing: ${op.description}`);
-                  await client.query(op.sql);
+                  try {
+                    await client.query(op.sql);
+                  } catch (opErr) {
+                    const pgMsg = opErr instanceof Error ? opErr.message : String(opErr);
+                    throw new Error(`${op.description}\n  SQL: ${op.sql}\n  Error: ${pgMsg}`, { cause: opErr });
+                  }
                 },
                 { label: `index: ${op.description}`, maxRetries: config.maxRetries },
               );
@@ -535,7 +550,12 @@ export async function runMigrate(config: SchemaFlowConfig): Promise<ExecutionRes
               await retryOnTimeout(
                 async () => {
                   logger.debug(`Executing: ${op.description}`);
-                  await client.query(op.sql);
+                  try {
+                    await client.query(op.sql);
+                  } catch (opErr) {
+                    const pgMsg = opErr instanceof Error ? opErr.message : String(opErr);
+                    throw new Error(`${op.description}\n  SQL: ${op.sql}\n  Error: ${pgMsg}`, { cause: opErr });
+                  }
                 },
                 { label: `drop index: ${op.description}`, maxRetries: config.maxRetries },
               );
@@ -545,7 +565,12 @@ export async function runMigrate(config: SchemaFlowConfig): Promise<ExecutionRes
             // Enum ADD VALUE ops outside transaction (PG requirement)
             for (const op of enumValueOps) {
               logger.debug(`Executing: ${op.description}`);
-              await client.query(op.sql);
+              try {
+                await client.query(op.sql);
+              } catch (opErr) {
+                const pgMsg = opErr instanceof Error ? opErr.message : String(opErr);
+                throw new Error(`${op.description}\n  SQL: ${op.sql}\n  Error: ${pgMsg}`, { cause: opErr });
+              }
               opsExecuted++;
             }
 
@@ -604,7 +629,12 @@ export async function runMigrate(config: SchemaFlowConfig): Promise<ExecutionRes
                 await client.query("BEGIN");
                 for (const op of plan.foreignKeyOps) {
                   logger.debug(`Executing: ${op.description}`);
-                  await client.query(op.sql);
+                  try {
+                    await client.query(op.sql);
+                  } catch (opErr) {
+                    const pgMsg = opErr instanceof Error ? opErr.message : String(opErr);
+                    throw new Error(`${op.description}\n  SQL: ${op.sql}\n  Error: ${pgMsg}`, { cause: opErr });
+                  }
                 }
                 await client.query("COMMIT");
               },
@@ -620,7 +650,12 @@ export async function runMigrate(config: SchemaFlowConfig): Promise<ExecutionRes
               await retryOnTimeout(
                 async () => {
                   logger.debug(`Executing: ${op.description}`);
-                  await client.query(op.sql);
+                  try {
+                    await client.query(op.sql);
+                  } catch (opErr) {
+                    const pgMsg = opErr instanceof Error ? opErr.message : String(opErr);
+                    throw new Error(`${op.description}\n  SQL: ${op.sql}\n  Error: ${pgMsg}`, { cause: opErr });
+                  }
                 },
                 { label: `validate: ${op.description}`, maxRetries: config.maxRetries },
               );
