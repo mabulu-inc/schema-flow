@@ -58,6 +58,8 @@ export interface DbFunction {
   parameter_list: string;
   security_type: string;
   proretset: boolean;
+  /** Full return type from pg_get_function_result, e.g. "TABLE(col1 uuid, col2 text)" */
+  full_return_type: string;
 }
 
 export interface DbTrigger {
@@ -498,6 +500,7 @@ export async function getExistingFunctions(client: pg.PoolClient, pgSchema: stri
        r.routine_definition,
        r.security_type,
        proc.proretset,
+       pg_get_function_result(proc.oid) AS full_return_type,
        COALESCE(
          string_agg(p.parameter_name || ' ' || p.data_type, ', ' ORDER BY p.ordinal_position),
          ''
@@ -516,7 +519,7 @@ export async function getExistingFunctions(client: pg.PoolClient, pgSchema: stri
          SELECT 1 FROM pg_catalog.pg_depend dep
          WHERE dep.objid = proc.oid AND dep.deptype = 'e'
        )
-     GROUP BY r.routine_name, r.routine_type, r.data_type, r.external_language, r.routine_definition, r.security_type, proc.proretset
+     GROUP BY r.routine_name, r.routine_type, r.data_type, r.external_language, r.routine_definition, r.security_type, proc.proretset, proc.oid
      ORDER BY r.routine_name`,
     [pgSchema],
   );

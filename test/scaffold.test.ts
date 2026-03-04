@@ -187,6 +187,33 @@ describe("generateFromDb", () => {
     expect(filenames).toContain("real_table.yaml");
   });
 
+  it("preserves TABLE return type for table-returning functions", async () => {
+    await execSql(
+      ctx.connectionString,
+      `CREATE OR REPLACE FUNCTION session_authorization()
+       RETURNS TABLE(sa_tenant_id uuid, sa_producer_id uuid, sa_region_id uuid, sa_plant_id uuid)
+       LANGUAGE plpgsql SECURITY DEFINER AS $$
+       BEGIN
+         RETURN QUERY SELECT NULL::uuid, NULL::uuid, NULL::uuid, NULL::uuid;
+       END;
+       $$`,
+    );
+
+    const config = resolveConfig({
+      connectionString: ctx.connectionString,
+      baseDir: ctx.project.baseDir,
+    });
+
+    await generateFromDb(config);
+
+    const fnFile = path.join(ctx.project.schemaDir, "fn_session_authorization.yaml");
+    expect(existsSync(fnFile)).toBe(true);
+
+    const content = readFileSync(fnFile, "utf-8");
+    expect(content).toContain("TABLE(sa_tenant_id uuid, sa_producer_id uuid, sa_region_id uuid, sa_plant_id uuid)");
+    expect(content).not.toMatch(/returns: record\b/);
+  });
+
   it("generates SETOF return type for set-returning functions", async () => {
     await execSql(
       ctx.connectionString,

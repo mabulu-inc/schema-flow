@@ -362,11 +362,18 @@ function functionToYaml(
     parameter_list: string;
     security_type?: string;
     proretset?: boolean;
+    full_return_type?: string;
   },
   comment?: string | null,
 ): string {
-  const dataType = fn.data_type || "void";
-  const returns = fn.proretset ? `SETOF ${dataType}` : dataType;
+  // Prefer full_return_type from pg_get_function_result() — it preserves TABLE(...) definitions
+  let returns: string;
+  if (fn.full_return_type) {
+    returns = fn.full_return_type;
+  } else {
+    const dataType = fn.data_type || "void";
+    returns = fn.proretset ? `SETOF ${dataType}` : dataType;
+  }
   const obj: Record<string, unknown> = {
     name: fn.routine_name,
     language: fn.external_language?.toLowerCase() || "plpgsql",
