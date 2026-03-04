@@ -9,7 +9,7 @@ const { Pool } = pg;
 const RETRYABLE_CODES = new Set(["55P03", "57014", "40001", "40P01"]);
 
 export function isRetryable(err: unknown): boolean {
-  return err instanceof Error && RETRYABLE_CODES.has((err as any).code);
+  return err instanceof Error && RETRYABLE_CODES.has((err as unknown as Record<string, unknown>).code as string);
 }
 
 function sleep(ms: number): Promise<void> {
@@ -31,7 +31,7 @@ export async function retryOnTimeout<T>(
       if (attempt >= maxRetries || !isRetryable(err)) throw err;
       const delay = baseDelay * 2 ** attempt;
       logger.warn(
-        `${label} timed out (${(err as any).code}), retrying in ${delay}ms (attempt ${attempt + 1}/${maxRetries})`,
+        `${label} timed out (${(err as unknown as Record<string, unknown>).code}), retrying in ${delay}ms (attempt ${attempt + 1}/${maxRetries})`,
       );
       await sleep(delay);
     }

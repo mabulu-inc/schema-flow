@@ -35,7 +35,7 @@ export async function loadMixins(mixinsDir: string): Promise<Map<string, MixinSc
 }
 
 /**
- * Replace `{table}` placeholder in name fields of triggers, indexes, and checks.
+ * Replace `{table}` placeholder with the consuming table's name.
  */
 function interpolateNames(str: string, tableName: string): string {
   return str.replace(/\{table\}/g, tableName);
@@ -46,7 +46,7 @@ function interpolateNames(str: string, tableName: string): string {
  * For each table with `use`, resolves mixin references and merges:
  * - Columns: mixin columns first (in use order), then table columns. Table overrides mixin on name clash.
  * - Indexes, checks, triggers: mixin entries appended before table entries.
- * - `{table}` interpolation in name fields of triggers, indexes, and checks.
+ * - `{table}` interpolation in name and expression fields of triggers, indexes, checks, and policies.
  * Strips the `use` property from output.
  */
 export function expandMixins(schemas: TableSchema[], mixinMap: Map<string, MixinSchema>): TableSchema[] {
@@ -80,6 +80,7 @@ export function expandMixins(schemas: TableSchema[], mixinMap: Map<string, Mixin
           mixinIndexes.push({
             ...idx,
             name: idx.name ? interpolateNames(idx.name, schema.table) : idx.name,
+            where: idx.where ? interpolateNames(idx.where, schema.table) : idx.where,
           });
         }
       }
@@ -88,6 +89,7 @@ export function expandMixins(schemas: TableSchema[], mixinMap: Map<string, Mixin
           mixinChecks.push({
             ...chk,
             name: chk.name ? interpolateNames(chk.name, schema.table) : chk.name,
+            expression: interpolateNames(chk.expression, schema.table),
           });
         }
       }
@@ -104,6 +106,8 @@ export function expandMixins(schemas: TableSchema[], mixinMap: Map<string, Mixin
           mixinPolicies.push({
             ...pol,
             name: interpolateNames(pol.name, schema.table),
+            using: pol.using ? interpolateNames(pol.using, schema.table) : pol.using,
+            check: pol.check ? interpolateNames(pol.check, schema.table) : pol.check,
           });
         }
       }

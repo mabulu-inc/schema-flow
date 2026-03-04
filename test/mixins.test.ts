@@ -254,6 +254,66 @@ describe("expandMixins", () => {
     expect(result[0].columns[0].name).toBe("tenant_id");
   });
 
+  it("interpolates {table} in policy using and check expressions", () => {
+    const mixinMap = new Map<string, MixinSchema>([
+      [
+        "session_auth",
+        {
+          mixin: "session_auth",
+          rls: true,
+          policies: [
+            {
+              name: "session_authorization",
+              for: "ALL",
+              using: "EXISTS (SELECT 1 FROM sessions WHERE {table}.tenant_id = sessions.tenant_id)",
+              check: "{table}.tenant_id IS NOT NULL",
+              permissive: true,
+            },
+          ],
+        },
+      ],
+    ]);
+
+    const schemas: TableSchema[] = [
+      {
+        table: "orders",
+        columns: [{ name: "id", type: "serial", primary_key: true }],
+        use: ["session_auth"],
+      },
+    ];
+
+    const result = expandMixins(schemas, mixinMap);
+    expect(result[0].policies![0].using).toBe(
+      "EXISTS (SELECT 1 FROM sessions WHERE orders.tenant_id = sessions.tenant_id)",
+    );
+    expect(result[0].policies![0].check).toBe("orders.tenant_id IS NOT NULL");
+  });
+
+  it("interpolates {table} in check expressions and index where clauses", () => {
+    const mixinMap = new Map<string, MixinSchema>([
+      [
+        "scoped",
+        {
+          mixin: "scoped",
+          checks: [{ name: "chk_{table}_valid", expression: "{table}.active = true" }],
+          indexes: [{ name: "idx_{table}_active", columns: ["active"], where: "{table}.deleted_at IS NULL" }],
+        },
+      ],
+    ]);
+
+    const schemas: TableSchema[] = [
+      {
+        table: "items",
+        columns: [{ name: "id", type: "serial", primary_key: true }],
+        use: ["scoped"],
+      },
+    ];
+
+    const result = expandMixins(schemas, mixinMap);
+    expect(result[0].checks![0].expression).toBe("items.active = true");
+    expect(result[0].indexes![0].where).toBe("items.deleted_at IS NULL");
+  });
+
   it("propagates mixin rls: true to table", () => {
     const mixinMap = new Map<string, MixinSchema>([
       [

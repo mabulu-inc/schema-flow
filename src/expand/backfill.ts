@@ -72,7 +72,7 @@ export async function runBackfill(pool: pg.Pool, options: BackfillOptions): Prom
         batchRetries++;
         const delay = baseDelay * 2 ** (batchRetries - 1);
         logger.warn(
-          `Backfill batch timed out (${(err as any).code}), retrying in ${delay}ms (attempt ${batchRetries}/${maxBatchRetries})`,
+          `Backfill batch timed out (${(err as unknown as Record<string, unknown>).code}), retrying in ${delay}ms (attempt ${batchRetries}/${maxBatchRetries})`,
         );
         client.release();
         await new Promise((r) => setTimeout(r, delay));

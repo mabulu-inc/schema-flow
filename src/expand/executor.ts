@@ -109,19 +109,19 @@ export async function showExpandStatus(config: SchemaFlowConfig): Promise<void> 
       return;
     }
 
-    console.log("");
-    console.log("  Expand/Contract Status:");
-    console.log("  " + "─".repeat(50));
+    logger.info("");
+    logger.info("  Expand/Contract Status:");
+    logger.info("  " + "─".repeat(50));
 
     for (const r of records) {
       const status = r.status.toUpperCase();
       const arrow = `${r.old_column} → ${r.new_column}`;
-      console.log(`  ${r.table_name}: ${arrow} [${status}]`);
-      console.log(`    Transform: ${r.transform}`);
-      if (r.reverse_expr) console.log(`    Reverse:   ${r.reverse_expr}`);
-      console.log(`    Trigger:   ${r.trigger_name}`);
-      console.log(`    Started:   ${r.started_at}`);
-      console.log("");
+      logger.info(`  ${r.table_name}: ${arrow} [${status}]`);
+      logger.info(`    Transform: ${r.transform}`);
+      if (r.reverse_expr) logger.info(`    Reverse:   ${r.reverse_expr}`);
+      logger.info(`    Trigger:   ${r.trigger_name}`);
+      logger.info(`    Started:   ${r.started_at}`);
+      logger.info("");
     }
   });
 }
