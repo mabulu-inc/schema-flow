@@ -211,7 +211,21 @@ export async function buildPlan(
   }
 
   // Separate structure ops from FK ops and validate ops (only from allowed)
-  const structureOps = allowed.filter((op) => op.phase === "structure");
+  // Within structure ops, reorder so all create_table ops come before
+  // enable_rls and create_policy ops. This prevents failures when a policy
+  // on table B references table A via subquery and B is planned first.
+  const rawStructureOps = allowed.filter((op) => op.phase === "structure");
+  const isPolicyRelated = (o: Operation) =>
+    o.type === "enable_rls" ||
+    o.type === "create_policy" ||
+    (o.type === "set_comment" && o.sql.includes("COMMENT ON POLICY"));
+  const structureOps = [
+    ...rawStructureOps.filter((o) => !isPolicyRelated(o)),
+    ...rawStructureOps.filter((o) => o.type === "enable_rls"),
+    ...rawStructureOps.filter(
+      (o) => o.type === "create_policy" || (o.type === "set_comment" && o.sql.includes("COMMENT ON POLICY")),
+    ),
+  ];
   const foreignKeyOps = allowed.filter((op) => op.phase === "foreign_key");
   const validateOps = allowed.filter((op) => op.phase === "validate");
 

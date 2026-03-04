@@ -789,4 +789,42 @@ describe("planner", () => {
     // 2 VALIDATE CONSTRAINT ops
     expect(plan.validateOps).toHaveLength(2);
   });
+
+  it("orders CREATE TABLE before cross-table policies in structureOps", async () => {
+    // Table B has a policy that references table A via subquery.
+    // If B is listed before A, the policy must still come after A's CREATE TABLE.
+    const desired: TableSchema[] = [
+      {
+        table: "batch_ingredients",
+        columns: [
+          { name: "id", type: "serial", primary_key: true },
+          { name: "plant_id", type: "integer" },
+        ],
+        rls: true,
+        policies: [
+          {
+            name: "session_authorization",
+            for: "ALL",
+            to: ["PUBLIC"],
+            using: "(EXISTS (SELECT 1 FROM plants p WHERE p.id = batch_ingredients.plant_id))",
+          },
+        ],
+      },
+      {
+        table: "plants",
+        columns: [
+          { name: "id", type: "serial", primary_key: true },
+          { name: "name", type: "text" },
+        ],
+      },
+    ];
+
+    const plan = await buildPlan(ctx.client, desired, "public");
+
+    // Every create_table op must appear before every create_policy op
+    const lastCreateTableIdx = plan.structureOps.findLastIndex((o) => o.type === "create_table");
+    const firstPolicyIdx = plan.structureOps.findIndex((o) => o.type === "create_policy");
+
+    expect(firstPolicyIdx).toBeGreaterThan(lastCreateTableIdx);
+  });
 });
