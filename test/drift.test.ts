@@ -189,6 +189,125 @@ columns:
     expect(text).toContain("email");
   });
 
+  it("detects function return type mismatch", async () => {
+    // Create function with TABLE return type in DB
+    await execSql(
+      ctx.connectionString,
+      `CREATE OR REPLACE FUNCTION session_authorization()
+       RETURNS TABLE(sa_tenant_id uuid, sa_producer_id uuid)
+       LANGUAGE plpgsql SECURITY DEFINER AS $$
+       BEGIN
+         RETURN QUERY SELECT NULL::uuid, NULL::uuid;
+       END;
+       $$`,
+    );
+
+    // Write YAML with wrong return type (record instead of TABLE)
+    writeSchema(
+      ctx.project.schemaDir,
+      "fn_session_authorization.yaml",
+      `name: session_authorization
+language: plpgsql
+returns: record
+args: ""
+body: |
+  BEGIN
+    RETURN QUERY SELECT NULL::uuid, NULL::uuid;
+  END;
+replace: true
+security: definer
+`,
+    );
+
+    const config = resolveConfig({
+      connectionString: ctx.connectionString,
+      baseDir: ctx.project.baseDir,
+    });
+
+    const report = await detectDrift(config);
+    const fnDrift = report.items.filter((i) => i.category === "function" && i.name === "session_authorization");
+    expect(fnDrift).toHaveLength(1);
+    expect(fnDrift[0].direction).toBe("mismatch");
+    expect(fnDrift[0].details).toBeDefined();
+    expect(fnDrift[0].details!.some((d) => d.field === "returns")).toBe(true);
+  });
+
+  it("detects function body mismatch", async () => {
+    await execSql(
+      ctx.connectionString,
+      `CREATE OR REPLACE FUNCTION greet()
+       RETURNS text LANGUAGE plpgsql AS $$
+       BEGIN
+         RETURN 'hello';
+       END;
+       $$`,
+    );
+
+    writeSchema(
+      ctx.project.schemaDir,
+      "fn_greet.yaml",
+      `name: greet
+language: plpgsql
+returns: text
+args: ""
+body: |
+  BEGIN
+    RETURN 'goodbye';
+  END;
+replace: true
+`,
+    );
+
+    const config = resolveConfig({
+      connectionString: ctx.connectionString,
+      baseDir: ctx.project.baseDir,
+    });
+
+    const report = await detectDrift(config);
+    const fnDrift = report.items.filter((i) => i.category === "function" && i.name === "greet");
+    expect(fnDrift).toHaveLength(1);
+    expect(fnDrift[0].direction).toBe("mismatch");
+    expect(fnDrift[0].details!.some((d) => d.field === "body")).toBe(true);
+  });
+
+  it("no drift when function body matches", async () => {
+    await execSql(
+      ctx.connectionString,
+      `CREATE OR REPLACE FUNCTION add_one(x integer)
+       RETURNS integer LANGUAGE plpgsql AS $$
+       BEGIN
+         RETURN x + 1;
+       END;
+       $$`,
+    );
+
+    writeSchema(
+      ctx.project.schemaDir,
+      "fn_add_one.yaml",
+      `name: add_one
+language: plpgsql
+returns: integer
+args: "x integer"
+body: |
+  BEGIN
+    RETURN x + 1;
+  END;
+replace: true
+`,
+    );
+
+    const config = resolveConfig({
+      connectionString: ctx.connectionString,
+      baseDir: ctx.project.baseDir,
+    });
+
+    const report = await detectDrift(config);
+    const fnDrift = report.items.filter(
+      (i) => i.category === "function" && i.name === "add_one" && i.direction === "mismatch",
+    );
+    expect(fnDrift).toHaveLength(0);
+  });
+
   it("formats JSON report", async () => {
     const config = resolveConfig({
       connectionString: ctx.connectionString,

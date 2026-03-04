@@ -288,27 +288,59 @@ export async function detectDrift(config: SchemaFlowConfig): Promise<DriftReport
 
     // Diff functions
     const existingFunctions = await getExistingFunctions(client, config.pgSchema);
-    const existingFuncSet = new Set(existingFunctions.map((f) => f.routine_name));
-
+    const existingFuncByName = new Map(existingFunctions.map((f) => [f.routine_name, f]));
     for (const fn of parsedFunctions) {
       functionsChecked++;
-      if (!existingFuncSet.has(fn.name)) {
+      const dbFn = existingFuncByName.get(fn.name);
+      if (!dbFn) {
         items.push({
           category: "function",
           direction: "missing_from_db",
           name: fn.name,
           description: `Function "${fn.name}" defined in YAML but does not exist in database`,
         });
-      } else if (fn.comment !== undefined) {
-        const currentComment = await getFunctionComment(client, fn.name, config.pgSchema);
-        if (fn.comment !== currentComment) {
+      } else {
+        // Compare function properties
+        const details: DriftItem["details"] = [];
+        const dbReturns = dbFn.full_return_type || (dbFn.proretset ? `SETOF ${dbFn.data_type}` : dbFn.data_type);
+        if (fn.returns && normalizeReturns(fn.returns) !== normalizeReturns(dbReturns)) {
+          details.push({ field: "returns", expected: fn.returns, actual: dbReturns });
+        }
+        const dbLang = (dbFn.external_language || "plpgsql").toLowerCase();
+        if (fn.language && fn.language.toLowerCase() !== dbLang) {
+          details.push({ field: "language", expected: fn.language, actual: dbLang });
+        }
+        const dbSecurity = dbFn.security_type === "DEFINER" ? "definer" : "invoker";
+        const yamlSecurity = fn.security || "invoker";
+        if (yamlSecurity !== dbSecurity) {
+          details.push({ field: "security", expected: yamlSecurity, actual: dbSecurity });
+        }
+        if (fn.body && dbFn.routine_definition) {
+          if (normalizeBody(fn.body) !== normalizeBody(dbFn.routine_definition)) {
+            details.push({ field: "body", expected: fn.body.trim(), actual: dbFn.routine_definition.trim() });
+          }
+        }
+        if (details.length > 0) {
           items.push({
-            category: "comment",
+            category: "function",
             direction: "mismatch",
             name: fn.name,
-            description: `Function comment on "${fn.name}" differs`,
-            details: [{ field: "comment", expected: fn.comment, actual: currentComment || "(none)" }],
+            description: `Function "${fn.name}" differs: ${details.map((d) => d.field).join(", ")}`,
+            details,
           });
+        }
+
+        if (fn.comment !== undefined) {
+          const currentComment = await getFunctionComment(client, fn.name, config.pgSchema);
+          if (fn.comment !== currentComment) {
+            items.push({
+              category: "comment",
+              direction: "mismatch",
+              name: fn.name,
+              description: `Function comment on "${fn.name}" differs`,
+              details: [{ field: "comment", expected: fn.comment, actual: currentComment || "(none)" }],
+            });
+          }
         }
       }
     }
@@ -831,6 +863,14 @@ function diffUniqueConstraints(
       });
     }
   }
+}
+
+function normalizeReturns(r: string): string {
+  return r.toLowerCase().replace(/\s+/g, " ").replace(/\(\s+/g, "(").replace(/\s+\)/g, ")").trim();
+}
+
+function normalizeBody(b: string): string {
+  return b.replace(/\s+/g, " ").trim();
 }
 
 function isSerial(t: string): boolean {
