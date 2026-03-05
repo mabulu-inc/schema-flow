@@ -39,6 +39,10 @@ export function parseColumnDef(col: Record<string, unknown>, filePath: string): 
     unique_name: col.unique_name !== undefined ? String(col.unique_name) : undefined,
     references: col.references
       ? {
+          schema:
+            (col.references as Record<string, unknown>).schema !== undefined
+              ? String((col.references as Record<string, unknown>).schema)
+              : undefined,
           table: (col.references as Record<string, unknown>).table as string,
           column: (col.references as Record<string, unknown>).column as string,
           name:

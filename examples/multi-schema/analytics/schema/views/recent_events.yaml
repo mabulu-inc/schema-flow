@@ -1,0 +1,12 @@
+view: recent_events
+query: |
+  SELECT
+    e.id,
+    e.event_type,
+    e.payload,
+    e.occurred_at,
+    u.email       AS user_email,
+    u.display_name AS user_name
+  FROM analytics.events e
+  JOIN core.users u ON u.id = e.user_id
+  WHERE e.occurred_at > now() - interval '7 days'

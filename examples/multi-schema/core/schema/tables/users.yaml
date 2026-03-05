@@ -1,0 +1,18 @@
+table: users
+columns:
+  - name: id
+    type: serial
+    primary_key: true
+  - name: email
+    type: varchar(255)
+    unique: true
+  - name: display_name
+    type: varchar(100)
+  - name: team_id
+    type: integer
+    references:
+      table: teams
+      column: id
+  - name: created_at
+    type: timestamptz
+    default: now()

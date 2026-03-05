@@ -1,0 +1,25 @@
+# Events live in the analytics schema but reference core.users
+table: events
+columns:
+  - name: id
+    type: bigserial
+    primary_key: true
+  - name: user_id
+    type: integer
+    references:
+      schema: core
+      table: users
+      column: id
+  - name: event_type
+    type: varchar(100)
+  - name: payload
+    type: jsonb
+    default: "'{}'::jsonb"
+  - name: occurred_at
+    type: timestamptz
+    default: now()
+
+indexes:
+  - columns: [user_id]
+  - columns: [event_type, occurred_at]
+  - columns: [occurred_at]

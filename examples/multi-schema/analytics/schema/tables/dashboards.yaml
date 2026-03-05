@@ -1,0 +1,27 @@
+# Dashboards reference core.users (owner) and core.teams
+table: dashboards
+columns:
+  - name: id
+    type: serial
+    primary_key: true
+  - name: title
+    type: varchar(200)
+  - name: owner_id
+    type: integer
+    references:
+      schema: core
+      table: users
+      column: id
+  - name: team_id
+    type: integer
+    nullable: true
+    references:
+      schema: core
+      table: teams
+      column: id
+  - name: config
+    type: jsonb
+    default: "'{}'::jsonb"
+  - name: created_at
+    type: timestamptz
+    default: now()

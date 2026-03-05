@@ -20,6 +20,12 @@ A multi-tenant order system with membership-based access control.
 
 **Features covered:** everything in cms, plus tenant isolation via RESTRICTIVE RLS policies, modular roles (multiple roles per user per tenant), security functions for API integration (`register_account`, `create_membership`, `begin_session`, `grant_role`, `revoke_role`), generated columns, column-level grants, audit trail.
 
+## [Multi-Schema](./multi-schema/)
+
+An analytics platform split across two PostgreSQL schemas — `core` and `analytics`.
+
+**Features covered:** cross-schema foreign keys (`references.schema`), cross-schema views, migration ordering (core first, analytics second), separate schema directories.
+
 ## Running the tests
 
 Every example includes an integration test (`example.test.ts`) that migrates a fresh database and verifies the application behavior end-to-end. Run them all:

@@ -31,6 +31,7 @@ export interface DbConstraint {
   constraint_name: string;
   constraint_type: string;
   column_name: string;
+  foreign_schema_name: string | null;
   foreign_table_name: string | null;
   foreign_column_name: string | null;
   delete_rule: string | null;
@@ -271,6 +272,7 @@ export async function getTableConstraints(
          WHEN 'c' THEN 'CHECK'
        END AS constraint_type,
        a.attname AS column_name,
+       fn.nspname AS foreign_schema_name,
        ft.relname AS foreign_table_name,
        fa.attname AS foreign_column_name,
        CASE c.confdeltype
@@ -297,6 +299,7 @@ export async function getTableConstraints(
      LEFT JOIN LATERAL unnest(c.conkey) WITH ORDINALITY AS ak(attnum, ord) ON true
      LEFT JOIN pg_attribute a ON a.attrelid = t.oid AND a.attnum = ak.attnum
      LEFT JOIN pg_class ft ON c.confrelid = ft.oid
+     LEFT JOIN pg_namespace fn ON ft.relnamespace = fn.oid
      LEFT JOIN LATERAL unnest(c.confkey) WITH ORDINALITY AS fk(attnum, ord) ON fk.ord = ak.ord
      LEFT JOIN pg_attribute fa ON fa.attrelid = ft.oid AND fa.attnum = fk.attnum
      WHERE n.nspname = $1 AND t.relname = $2
@@ -402,7 +405,9 @@ export async function introspectTable(
     // Check for FK on this column (single-column FK)
     for (const [fkConstraintName, fkCols] of fkMap) {
       if (fkCols.length === 1 && fkCols[0].column_name === col.column_name) {
+        const fkSchema = fkCols[0].foreign_schema_name;
         def.references = {
+          schema: fkSchema && fkSchema !== pgSchema ? fkSchema : undefined,
           table: fkCols[0].foreign_table_name!,
           column: fkCols[0].foreign_column_name!,
           name: fkConstraintName,

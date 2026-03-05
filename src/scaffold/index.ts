@@ -274,10 +274,10 @@ function tableSchemaToYaml(schema: TableSchema): string {
     if (col.generated) colObj.generated = col.generated;
     if (col.comment) colObj.comment = col.comment;
     if (col.references) {
-      const refsObj: Record<string, unknown> = {
-        table: col.references.table,
-        column: col.references.column,
-      };
+      const refsObj: Record<string, unknown> = {};
+      if (col.references.schema) refsObj.schema = col.references.schema;
+      refsObj.table = col.references.table;
+      refsObj.column = col.references.column;
       if (col.references.name) refsObj.name = col.references.name;
       if (col.references.on_delete && col.references.on_delete !== "NO ACTION") {
         refsObj.on_delete = col.references.on_delete;

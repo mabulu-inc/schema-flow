@@ -22,6 +22,8 @@ export interface ColumnDef {
   /** Name of the single-column unique constraint */
   unique_name?: string;
   references?: {
+    /** Schema of the referenced table (omit for same-schema FKs) */
+    schema?: string;
     table: string;
     column: string;
     /** FK constraint name */

@@ -399,10 +399,11 @@ function planCreateTable(schema: TableSchema, pgSchema: string): Operation[] {
       const onUpdate = col.references.on_update || "NO ACTION";
       const deferrable = col.references.deferrable ? " DEFERRABLE" : "";
       const initiallyDeferred = col.references.initially_deferred ? " INITIALLY DEFERRED" : "";
+      const refSchema = col.references.schema || pgSchema;
       fkOps.push({
         type: "add_foreign_key_not_valid",
         table: schema.table,
-        sql: `ALTER TABLE "${pgSchema}"."${schema.table}" ADD CONSTRAINT "${fkName}" FOREIGN KEY ("${col.name}") REFERENCES "${pgSchema}"."${col.references.table}" ("${col.references.column}") ON DELETE ${onDelete} ON UPDATE ${onUpdate}${deferrable}${initiallyDeferred} NOT VALID;`,
+        sql: `ALTER TABLE "${pgSchema}"."${schema.table}" ADD CONSTRAINT "${fkName}" FOREIGN KEY ("${col.name}") REFERENCES "${refSchema}"."${col.references.table}" ("${col.references.column}") ON DELETE ${onDelete} ON UPDATE ${onUpdate}${deferrable}${initiallyDeferred} NOT VALID;`,
         description: `Add FK ${schema.table}.${col.name} → ${col.references.table}.${col.references.column} (NOT VALID)`,
         phase: "foreign_key",
         destructive: false,
@@ -591,10 +592,11 @@ async function planAlterTable(client: pg.PoolClient, desired: TableSchema, pgSch
         const onUpdate = col.references.on_update || "NO ACTION";
         const deferrable = col.references.deferrable ? " DEFERRABLE" : "";
         const initiallyDeferred = col.references.initially_deferred ? " INITIALLY DEFERRED" : "";
+        const refSchema = col.references.schema || pgSchema;
         ops.push({
           type: "add_foreign_key_not_valid",
           table: desired.table,
-          sql: `ALTER TABLE "${pgSchema}"."${desired.table}" ADD CONSTRAINT "${fkName}" FOREIGN KEY ("${col.name}") REFERENCES "${pgSchema}"."${col.references.table}" ("${col.references.column}") ON DELETE ${onDelete} ON UPDATE ${onUpdate}${deferrable}${initiallyDeferred} NOT VALID;`,
+          sql: `ALTER TABLE "${pgSchema}"."${desired.table}" ADD CONSTRAINT "${fkName}" FOREIGN KEY ("${col.name}") REFERENCES "${refSchema}"."${col.references.table}" ("${col.references.column}") ON DELETE ${onDelete} ON UPDATE ${onUpdate}${deferrable}${initiallyDeferred} NOT VALID;`,
           description: `Add FK ${desired.table}.${col.name} → ${col.references.table}.${col.references.column} (NOT VALID)`,
           phase: "foreign_key",
           destructive: false,
@@ -662,10 +664,11 @@ async function planAlterTable(client: pg.PoolClient, desired: TableSchema, pgSch
         const onUpdate = col.references.on_update || "NO ACTION";
         const deferrable = col.references.deferrable ? " DEFERRABLE" : "";
         const initiallyDeferred = col.references.initially_deferred ? " INITIALLY DEFERRED" : "";
+        const refSchema = col.references.schema || pgSchema;
         ops.push({
           type: "add_foreign_key_not_valid",
           table: desired.table,
-          sql: `ALTER TABLE "${pgSchema}"."${desired.table}" ADD CONSTRAINT "${fkName}" FOREIGN KEY ("${col.name}") REFERENCES "${pgSchema}"."${col.references.table}" ("${col.references.column}") ON DELETE ${onDelete} ON UPDATE ${onUpdate}${deferrable}${initiallyDeferred} NOT VALID;`,
+          sql: `ALTER TABLE "${pgSchema}"."${desired.table}" ADD CONSTRAINT "${fkName}" FOREIGN KEY ("${col.name}") REFERENCES "${refSchema}"."${col.references.table}" ("${col.references.column}") ON DELETE ${onDelete} ON UPDATE ${onUpdate}${deferrable}${initiallyDeferred} NOT VALID;`,
           description: `Add FK ${desired.table}.${col.name} → ${col.references.table}.${col.references.column} (NOT VALID)`,
           phase: "foreign_key",
           destructive: false,

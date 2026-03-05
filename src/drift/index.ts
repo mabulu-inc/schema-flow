@@ -871,6 +871,16 @@ function diffTable(desired: TableSchema, current: TableSchema, items: DriftItem[
 
     // FK comparisons
     if (col.references && existing.references) {
+      // FK target schema
+      const desiredFkSchema = col.references.schema || "";
+      const existingFkSchema = existing.references.schema || "";
+      if (desiredFkSchema !== existingFkSchema) {
+        details.push({
+          field: "fk_schema",
+          expected: desiredFkSchema || "(same schema)",
+          actual: existingFkSchema || "(same schema)",
+        });
+      }
       // FK target table
       if (col.references.table !== existing.references.table) {
         details.push({

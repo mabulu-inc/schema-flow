@@ -1,0 +1,10 @@
+table: teams
+columns:
+  - name: id
+    type: serial
+    primary_key: true
+  - name: name
+    type: varchar(100)
+  - name: created_at
+    type: timestamptz
+    default: now()
