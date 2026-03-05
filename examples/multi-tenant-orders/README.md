@@ -39,7 +39,7 @@ grants:
 | RLS                 | May bypass depending on SECURITY     | Always applies — it's the same table |
 | Indexes             | View can't use table indexes         | All indexes serve all roles          |
 | Consistency         | View query can drift from table      | Generated column is always in sync   |
-| Declarative         | View grants were in repeatable SQL   | Column-level grants are in YAML      |
+| Declarative         | Requires a separate view + grants    | Column-level grants are inline       |
 
 ## Schema at a glance
 

@@ -33,6 +33,89 @@ import { logger } from "../core/logger.js";
 import { discoverSchemaFiles, discoverScripts } from "../core/files.js";
 import { getFunctionComment } from "../introspect/index.js";
 
+/** Extract the type portion from a single argument declaration like "p_email text" or "OUT p_result integer" */
+function extractArgType(arg: string): string {
+  // Strip leading IN/OUT/INOUT/VARIADIC mode keywords
+  const modePattern = /^(?:IN\s+OUT|INOUT|OUT|IN|VARIADIC)\s+/i;
+  const stripped = arg.replace(modePattern, "");
+  // Strip DEFAULT clause
+  const noDefault = stripped.replace(/\s+DEFAULT\s+.*/i, "");
+  // Split remaining "name type" — take everything after the first token
+  const tokens = noDefault.trim().split(/\s+/);
+  if (tokens.length >= 2) {
+    return tokens.slice(1).join(" ");
+  }
+  // If only one token, it's just a type (positional, no name)
+  return tokens[0];
+}
+
+/**
+ * Smoke-test created functions by calling them with NULL arguments inside a SAVEPOINT.
+ * Catches references to non-existent tables, columns, or functions that PG defers until execution.
+ * Trigger functions are skipped (they require trigger context and can't be called directly).
+ * Returns an array of error messages for broken functions.
+ */
+async function smokeTestFunctions(
+  client: pg.PoolClient,
+  functions: FunctionSchema[],
+  pgSchema: string,
+): Promise<string[]> {
+  const errors: string[] = [];
+  for (const fn of functions) {
+    // Skip trigger functions — they can't be called outside trigger context
+    if (fn.returns.toLowerCase() === "trigger") continue;
+    // Skip OUT-only functions (no callable signature with inputs)
+    if (fn.args && /^\s*OUT\s/i.test(fn.args) && !/\bIN\b/i.test(fn.args) && !/\bINOUT\b/i.test(fn.args)) continue;
+
+    // Filter out OUT-mode args — only IN/INOUT/VARIADIC are passed as call args
+    const callableArgs = fn.args
+      ? fn.args
+          .split(/,(?![^(]*\))/)
+          .map((a) => a.trim())
+          .filter((a) => !/^\s*OUT\s/i.test(a))
+      : [];
+    const callableTypes = callableArgs.map((a) => extractArgType(a));
+    const nullArgs = callableTypes.map((t) => `NULL::${t}`).join(", ");
+    const argsClause = fn.args ? `(${fn.args})` : "()";
+    const qualifiedName = `"${pgSchema}"."${fn.name}"`;
+    const callSql = `SELECT ${qualifiedName}(${nullArgs})`;
+
+    try {
+      await client.query("SAVEPOINT smoke_test");
+      await client.query(callSql);
+      await client.query("ROLLBACK TO smoke_test");
+    } catch (err) {
+      // Always rollback the savepoint on error
+      try {
+        await client.query("ROLLBACK TO smoke_test");
+      } catch {
+        /* savepoint may already be gone */
+      }
+
+      const pgErr = err as { code?: string; message?: string };
+      const code = pgErr.code || "";
+      // Specific class-42 codes that indicate the function body references
+      // something that doesn't exist in the database catalog:
+      const brokenCodes = new Set([
+        "42P01", // undefined_table
+        "42703", // undefined_column
+        "42883", // undefined_function
+      ]);
+      // Other class-42 codes (42704 undefined_object for missing GUC settings,
+      // 42804 datatype_mismatch from NULL args, etc.) are contextual and don't
+      // necessarily mean the function body is broken.
+      if (brokenCodes.has(code)) {
+        const msg = `Smoke test failed for function ${fn.name}${argsClause}: ${pgErr.message || String(err)}`;
+        errors.push(msg);
+        logger.error(msg);
+      } else {
+        logger.debug(`Smoke test for ${fn.name}: non-fatal error (${code}), function is callable`);
+      }
+    }
+  }
+  return errors;
+}
+
 /** Derive a stable advisory lock key from the pgSchema name */
 function advisoryLockKey(pgSchema: string): string {
   const hash = createHash("sha256").update(`schema-flow:${pgSchema}`).digest();
@@ -562,6 +645,14 @@ export async function runMigrate(config: SchemaFlowConfig): Promise<ExecutionRes
                       }
                     }
 
+                    // Smoke-test non-trigger functions to catch broken references
+                    if (parsedFunctions.length > 0) {
+                      const smokeErrors = await smokeTestFunctions(client, parsedFunctions, config.pgSchema);
+                      if (smokeErrors.length > 0) {
+                        throw new Error(smokeErrors.join("\n"));
+                      }
+                    }
+
                     // Phase 3: triggers, policies, grants (after functions exist)
                     for (const op of postFunctionOps) {
                       const marker = op.destructive ? "[DESTRUCTIVE] " : "";
@@ -896,6 +987,14 @@ export async function runValidate(config: SchemaFlowConfig): Promise<ValidationR
         logger.debug(`Validating function: ${fn.name}`);
         await client.query(sql);
         opsChecked++;
+      }
+
+      // Smoke-test non-trigger functions to catch broken references
+      if (parsedFunctions.length > 0) {
+        const smokeErrors = await smokeTestFunctions(client, parsedFunctions, config.pgSchema);
+        if (smokeErrors.length > 0) {
+          throw new Error(smokeErrors.join("\n"));
+        }
       }
 
       // Phase 3: triggers, policies, grants (after functions)

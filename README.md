@@ -42,7 +42,7 @@ schema/
   pre/        ← Pre-migration SQL scripts (run before schema changes)
   post/       ← Post-migration SQL scripts (run after schema changes)
   mixins/     ← Reusable schema mixins (timestamps, soft_delete, etc.)
-  repeatable/ ← SQL scripts re-run whenever their content changes (grants, refresh, etc.)
+  repeatable/ ← SQL scripts re-run whenever their content changes (refresh, etc.)
 ```
 
 ### 2. Define your tables
@@ -493,11 +493,13 @@ ON CONFLICT (name) DO NOTHING;
 COMMIT;
 ```
 
-**Grants** — for one-time grants. For grants that should be reapplied whenever they change, use [`schema/repeatable/`](#repeatable-migrations) instead.
+**Grants** — for grants that don't fit the declarative YAML model (e.g., `GRANT ... ON ALL TABLES IN SCHEMA`).
 
 ```sql
 GRANT SELECT ON ALL TABLES IN SCHEMA public TO readonly_role;
 ```
+
+For table-level and column-level grants, prefer the declarative `grants:` key in table YAML — see [Roles & Grants](#roles--row-level-security).
 
 ### Choosing the right approach
 
@@ -512,7 +514,8 @@ GRANT SELECT ON ALL TABLES IN SCHEMA public TO readonly_role;
 | Split or merge columns | Expand/contract |
 | Backfill existing rows | Pre- or post-migration script |
 | Seed data | Post-migration script |
-| Grants and permissions | Post-migration script or repeatable |
+| Table/column grants | Declarative `grants:` in table YAML |
+| Schema-wide grants | Post-migration script |
 
 ## Zero-Downtime Safety
 
@@ -828,25 +831,30 @@ A role with no matching PERMISSIVE policy for a command is denied — `app_audit
 
 #### Step 3: Column-level access
 
-RLS controls which **rows** a role can see. To control which **columns** a role can see, use column-level `GRANT` in a repeatable script:
+RLS controls which **rows** a role can see. To control which **columns** a role can see, add column-level grants in the table YAML:
 
-```sql
--- schema/repeatable/grants.sql
+```yaml
+# schema/tables/orders.yaml (grants section)
+grants:
+  # Users: full table access (RLS restricts rows)
+  - to: app_user
+    privileges: [SELECT, INSERT, UPDATE]
 
--- Users: full column access (RLS restricts rows)
-GRANT SELECT, INSERT, UPDATE ON orders TO app_user;
+  # Managers: full table access
+  - to: app_manager
+    privileges: [SELECT, UPDATE]
 
--- Managers: full column access
-GRANT SELECT, UPDATE ON orders TO app_manager;
+  # Auditors: read-only, payment details hidden
+  - to: app_auditor
+    privileges: [SELECT]
+    columns: [id, tenant_id, user_id, amount, status, created_at]
 
--- Auditors: read-only, payment details hidden
-GRANT SELECT (id, tenant_id, user_id, amount, status, created_at) ON orders TO app_auditor;
-
--- Service: full access
-GRANT ALL ON orders TO app_service;
+  # Service: full access
+  - to: app_service
+    privileges: [ALL]
 ```
 
-Column-level `GRANT` composes with RLS — `app_auditor` can only read the listed columns, and only for rows passing both the tenant isolation and `auditors_select` policies.
+Column-level grants compose with RLS — `app_auditor` can only read the listed columns, and only for rows passing both the tenant isolation and `auditors_select` policies.
 
 For more complex masking (e.g., showing a redacted value instead of hiding the column entirely), use a view:
 
@@ -862,8 +870,6 @@ comment: "Audit view with masked payment details"
 ```
 
 Then grant auditors access to the view instead of (or in addition to) the base table.
-
-Placing grants in `schema/repeatable/` ensures they are reapplied whenever the file changes, keeping permissions in sync with schema changes.
 
 ### Mixins
 
@@ -1139,7 +1145,7 @@ This:
 
 ## Pre/Post Migration Scripts
 
-For operations that can't be expressed declaratively — column renames, data migrations, grants, seed data — use SQL scripts.
+For operations that can't be expressed declaratively — column renames, data migrations, schema-wide grants — use SQL scripts.
 
 ### Scaffold a script
 
@@ -1495,13 +1501,12 @@ Place SQL files in `schema/repeatable/` for scripts that should re-run whenever 
 
 ```
 schema/repeatable/
-  grants.sql
   refresh_views.sql
 ```
 
 Repeatable files are tracked by content hash. When the file content changes, the script is re-executed. When unchanged, it is skipped. Repeatables run after all other migration phases.
 
-Common use cases: GRANT/REVOKE statements, materialized view refreshes, function re-definitions that live outside schema YAML.
+Common use cases: materialized view refreshes, function re-definitions that live outside schema YAML, schema-wide GRANT/REVOKE statements that don't fit the declarative `grants:` model.
 
 ## Programmatic API
 
