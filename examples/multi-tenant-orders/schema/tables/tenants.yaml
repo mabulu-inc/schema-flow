@@ -1,0 +1,42 @@
+# Schema for table: tenants
+# Source of truth for tenant IDs. Every tenant_id FK points here.
+# This table is NOT tenant-isolated — it stands above the tenant boundary.
+
+table: tenants
+
+use: [auditable]
+
+columns:
+  - name: id
+    type: uuid
+    primary_key: true
+    default: gen_random_uuid()
+
+  - name: name
+    type: varchar(100)
+
+  - name: slug
+    type: varchar(100)
+    unique: true
+
+  - name: is_active
+    type: boolean
+    default: "true"
+
+indexes:
+  - columns: [slug]
+    unique: true
+
+checks:
+  - name: chk_slug_format
+    expression: "slug ~ '^[a-z0-9]+(-[a-z0-9]+)*$'"
+
+grants:
+  - to: [app_user, app_manager, app_auditor]
+    privileges: [SELECT]
+
+  - to: app_service
+    privileges: [SELECT, INSERT, UPDATE]
+
+  - to: app_admin
+    privileges: [SELECT, INSERT, UPDATE, DELETE]

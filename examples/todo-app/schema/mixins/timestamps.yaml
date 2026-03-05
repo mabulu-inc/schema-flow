@@ -1,0 +1,22 @@
+# Mixin: timestamps
+# Adds created_at and updated_at columns with an auto-update trigger.
+# Usage: add `use: [timestamps]` to any table.
+
+mixin: timestamps
+
+columns:
+  - name: created_at
+    type: timestamptz
+    default: now()
+
+  - name: updated_at
+    type: timestamptz
+    default: now()
+
+triggers:
+  - name: set_{table}_updated_at
+    timing: BEFORE
+    events: [UPDATE]
+    function: update_timestamp
+    for_each: ROW
+    when: "OLD.* IS DISTINCT FROM NEW.*"

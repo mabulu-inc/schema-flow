@@ -1,0 +1,99 @@
+# Schema for table: order_items
+# Line items within an order. Demonstrates a generated column for line_total.
+
+table: order_items
+
+use: [tenant_isolation]
+
+columns:
+  - name: id
+    type: serial
+    primary_key: true
+
+  - name: order_id
+    type: integer
+    references:
+      table: orders
+      column: id
+      on_delete: CASCADE
+
+  - name: product_name
+    type: varchar(255)
+
+  - name: quantity
+    type: integer
+
+  - name: unit_price
+    type: integer
+    comment: "Price per unit in cents"
+
+  - name: line_total
+    type: integer
+    generated: "quantity * unit_price"
+    comment: "Computed total — always consistent, no application logic needed"
+
+indexes:
+  - columns: [order_id]
+
+checks:
+  - name: chk_quantity_positive
+    expression: "quantity > 0"
+
+  - name: chk_unit_price_positive
+    expression: "unit_price > 0"
+
+policies:
+  - name: users_select_own_items
+    for: SELECT
+    to: [app_user]
+    using: "EXISTS (SELECT 1 FROM orders WHERE id = order_id AND user_id = current_setting('app.user_id')::int)"
+
+  - name: users_insert_own_items
+    for: INSERT
+    to: [app_user]
+    check: "EXISTS (SELECT 1 FROM orders WHERE id = order_id AND user_id = current_setting('app.user_id')::int AND status = 'draft')"
+
+  - name: managers_select
+    for: SELECT
+    to: [app_manager]
+    using: "true"
+
+  - name: managers_modify
+    for: ALL
+    to: [app_manager]
+    using: "true"
+    check: "true"
+
+  - name: auditors_select
+    for: SELECT
+    to: [app_auditor]
+    using: "true"
+
+  - name: service_all
+    for: ALL
+    to: [app_service]
+    using: "true"
+    check: "true"
+
+  # Platform admin: cross-tenant access (not subject to tenant_isolation)
+  - name: admin_full_access
+    for: ALL
+    to: [app_admin]
+    using: "true"
+    check: "true"
+
+grants:
+  - to: app_user
+    privileges: [SELECT, INSERT]
+
+  - to: app_manager
+    privileges: [SELECT, INSERT, UPDATE, DELETE]
+
+  - to: app_auditor
+    privileges: [SELECT]
+
+  - to: app_service
+    privileges: [SELECT, INSERT, UPDATE, DELETE]
+
+  - to: app_admin
+    privileges: [SELECT, INSERT, UPDATE, DELETE]

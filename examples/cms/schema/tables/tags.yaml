@@ -1,0 +1,48 @@
+# Schema for table: tags
+# Flat taxonomy for cross-cutting labels (unlike hierarchical categories).
+
+table: tags
+
+use: [auditable]
+
+rls: true
+
+columns:
+  - name: id
+    type: serial
+    primary_key: true
+
+  - name: name
+    type: varchar(50)
+    unique: true
+
+  - name: slug
+    type: varchar(50)
+    unique: true
+
+indexes:
+  - columns: [slug]
+    unique: true
+
+checks:
+  - name: chk_tag_slug_format
+    expression: "slug ~ '^[a-z0-9]+(-[a-z0-9]+)*$'"
+
+policies:
+  - name: anyone_reads_tags
+    for: SELECT
+    to: [cms_author, cms_editor, cms_admin]
+    using: "true"
+
+  - name: editors_manage_tags
+    for: ALL
+    to: [cms_editor, cms_admin]
+    using: "true"
+    check: "true"
+
+grants:
+  - to: [cms_author, cms_editor, cms_admin]
+    privileges: [SELECT]
+
+  - to: [cms_editor, cms_admin]
+    privileges: [INSERT, UPDATE, DELETE]

@@ -1,0 +1,5 @@
+# Role: cms_author
+# Can create and edit their own articles, upload media.
+
+role: cms_author
+login: false

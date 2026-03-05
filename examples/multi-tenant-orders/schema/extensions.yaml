@@ -1,0 +1,4 @@
+# pgcrypto for gen_random_uuid() on tenant IDs.
+
+extensions:
+  - pgcrypto

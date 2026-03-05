@@ -1,0 +1,4 @@
+# Auditor — read-only, sees masked payment details via column-level grants.
+
+role: app_auditor
+login: false

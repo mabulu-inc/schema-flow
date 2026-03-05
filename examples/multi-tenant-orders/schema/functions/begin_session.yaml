@@ -1,0 +1,79 @@
+# Function: begin_session
+#
+# The API calls this at the start of every authenticated request.
+# It validates the user's membership, sets session variables, and returns
+# the user's roles plus the recommended PostgreSQL role for SET ROLE.
+#
+# The `admin` membership role is a security capability — it does NOT
+# affect PG role selection. A user with [user, admin] gets pg_role = app_user
+# but can call grant_role/revoke_role/create_membership because their
+# app.roles contains 'admin'.
+#
+# Usage from the API layer:
+#
+#   SELECT * FROM begin_session(123, 'tenant-uuid');
+#   -- Returns: roles = {admin,user}, pg_role = 'app_user'
+#
+#   SET LOCAL ROLE app_user;
+#   -- All subsequent queries in this transaction use RLS for app_user
+#
+# The function sets these session variables (transaction-scoped):
+#   app.tenant_id  — current tenant UUID
+#   app.user_id    — current user ID
+#   app.roles      — comma-separated list of roles (for application logic)
+#
+# SECURITY DEFINER: must read memberships before session vars are set.
+
+name: begin_session
+language: plpgsql
+returns: "TABLE(roles text[], pg_role text)"
+security: definer
+args: "p_user_id integer, p_tenant_id uuid"
+body: |
+  DECLARE
+    v_membership_id integer;
+    v_status text;
+    v_roles text[];
+    v_pg_role text;
+  BEGIN
+    -- Look up membership
+    SELECT m.id, m.status::text INTO v_membership_id, v_status
+    FROM memberships m
+    WHERE m.user_id = p_user_id
+      AND m.tenant_id = p_tenant_id;
+
+    IF v_membership_id IS NULL THEN
+      RAISE EXCEPTION 'No membership for user % in tenant %', p_user_id, p_tenant_id;
+    END IF;
+
+    IF v_status != 'active' THEN
+      RAISE EXCEPTION 'Membership is %: access denied', v_status;
+    END IF;
+
+    -- Collect all roles
+    SELECT array_agg(mr.role::text ORDER BY mr.role::text)
+    INTO v_roles
+    FROM membership_roles mr
+    WHERE mr.membership_id = v_membership_id;
+
+    IF v_roles IS NULL THEN
+      RAISE EXCEPTION 'User % has no roles in tenant %', p_user_id, p_tenant_id;
+    END IF;
+
+    -- Determine PG role from data-access roles (admin is a capability, not a data tier)
+    -- Priority: manager > auditor > user
+    IF 'manager' = ANY(v_roles) THEN
+      v_pg_role := 'app_manager';
+    ELSIF 'auditor' = ANY(v_roles) THEN
+      v_pg_role := 'app_auditor';
+    ELSE
+      v_pg_role := 'app_user';
+    END IF;
+
+    -- Set session variables (connection-scoped)
+    PERFORM set_config('app.tenant_id', p_tenant_id::text, false);
+    PERFORM set_config('app.user_id', p_user_id::text, false);
+    PERFORM set_config('app.roles', array_to_string(v_roles, ','), false);
+
+    RETURN QUERY SELECT v_roles, v_pg_role;
+  END;

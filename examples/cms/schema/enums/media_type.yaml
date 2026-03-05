@@ -1,0 +1,5 @@
+# Enum: media_type
+# Classifies uploaded files so the front-end can render them correctly.
+
+enum: media_type
+values: [image, video, document, audio]

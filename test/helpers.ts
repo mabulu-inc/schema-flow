@@ -1,75 +1,21 @@
 // test/helpers.ts
 // Shared test infrastructure: database lifecycle, temp directories, fixtures
+//
+// Core DB functions (createTestDb, execSql, withConnection) are re-exported
+// from the public testing module so internal and external tests use the
+// same infrastructure.
 
 import pg from "pg";
-import { mkdirSync, writeFileSync, rmSync, existsSync, readFileSync } from "node:fs";
+import { mkdirSync, writeFileSync, rmSync, existsSync } from "node:fs";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
 import { beforeEach, afterEach } from "vitest";
 
+// Import and re-export core functions from the public testing module
+import { createTestDb, execSql, withConnection, ensureTestDb, stopTestDb } from "../src/testing/index.js";
+export { createTestDb, execSql, withConnection, ensureTestDb, stopTestDb };
+
 const { Pool } = pg;
-
-function resolveRootUrl(): string {
-  if (process.env.TEST_DATABASE_URL) return process.env.TEST_DATABASE_URL;
-  if (process.env.DATABASE_URL) return process.env.DATABASE_URL;
-
-  // Read port from .test-db-port written by scripts/test-db-start.sh
-  const portFile = path.resolve(__dirname, "..", ".test-db-port");
-  let port = "5432";
-  try {
-    port = readFileSync(portFile, "utf-8").trim();
-  } catch {
-    // file missing — fall back to default port
-  }
-  return `postgresql://postgres:postgres@localhost:${port}/postgres`;
-}
-
-const ROOT_URL = resolveRootUrl();
-
-/**
- * Create an isolated test database. Returns a connection string and cleanup function.
- * Each test suite gets its own database to avoid cross-contamination.
- */
-export async function createTestDb(): Promise<{
-  connectionString: string;
-  dbName: string;
-  cleanup: () => Promise<void>;
-}> {
-  const suffix = randomBytes(4).toString("hex");
-  const dbName = `sf_test_${suffix}`;
-
-  const rootPool = new Pool({ connectionString: ROOT_URL, max: 2 });
-
-  try {
-    await rootPool.query(`CREATE DATABASE "${dbName}"`);
-  } finally {
-    await rootPool.end();
-  }
-
-  // Build connection string for the new database
-  const url = new URL(ROOT_URL);
-  url.pathname = `/${dbName}`;
-  const connectionString = url.toString();
-
-  const cleanup = async () => {
-    // Terminate all connections to the test database first
-    const pool = new Pool({ connectionString: ROOT_URL, max: 2 });
-    try {
-      await pool.query(
-        `SELECT pg_terminate_backend(pid)
-         FROM pg_stat_activity
-         WHERE datname = $1 AND pid <> pg_backend_pid()`,
-        [dbName],
-      );
-      // DROP DATABASE doesn't support parameterized identifiers; dbName is hex-only from randomBytes
-      await pool.query(`DROP DATABASE IF EXISTS "${dbName}"`);
-    } finally {
-      await pool.end();
-    }
-  };
-
-  return { connectionString, dbName, cleanup };
-}
 
 /**
  * Create a temporary directory structure that mimics a schema-flow project.
@@ -133,22 +79,10 @@ export function writeScript(dir: string, filename: string, content: string): str
 }
 
 /**
- * Execute raw SQL against a connection string.
- */
-export async function execSql(connectionString: string, sql: string, params?: unknown[]): Promise<pg.QueryResult> {
-  const pool = new Pool({ connectionString, max: 1 });
-  try {
-    return await pool.query(sql, params);
-  } finally {
-    await pool.end();
-  }
-}
-
-/**
  * Check if a table exists in the public schema.
  */
 export async function tableExists(connectionString: string, tableName: string): Promise<boolean> {
-  const res = await execSql(
+  const res = await querySql(
     connectionString,
     `SELECT 1 FROM information_schema.tables WHERE table_schema = 'public' AND table_name = $1`,
     [tableName],
@@ -160,7 +94,7 @@ export async function tableExists(connectionString: string, tableName: string): 
  * Get column names for a table.
  */
 export async function getColumns(connectionString: string, tableName: string): Promise<string[]> {
-  const res = await execSql(
+  const res = await querySql(
     connectionString,
     `SELECT column_name FROM information_schema.columns
      WHERE table_schema = 'public' AND table_name = $1
@@ -174,7 +108,7 @@ export async function getColumns(connectionString: string, tableName: string): P
  * Check if a foreign key constraint exists.
  */
 export async function fkExists(connectionString: string, constraintName: string): Promise<boolean> {
-  const res = await execSql(
+  const res = await querySql(
     connectionString,
     `SELECT 1 FROM information_schema.table_constraints
      WHERE constraint_type = 'FOREIGN KEY' AND constraint_name = $1`,
@@ -225,7 +159,7 @@ export async function triggerExists(
   triggerName: string,
   tableName: string,
 ): Promise<boolean> {
-  const res = await execSql(
+  const res = await querySql(
     connectionString,
     `SELECT 1 FROM information_schema.triggers
      WHERE trigger_schema = 'public' AND trigger_name = $1 AND event_object_table = $2`,
@@ -238,7 +172,7 @@ export async function triggerExists(
  * Check if a function exists in the public schema.
  */
 export async function functionExists(connectionString: string, functionName: string): Promise<boolean> {
-  const res = await execSql(
+  const res = await querySql(
     connectionString,
     `SELECT 1 FROM information_schema.routines
      WHERE routine_schema = 'public' AND routine_name = $1`,
@@ -260,7 +194,7 @@ export function writeMixin(mixinsDir: string, filename: string, content: string)
  * Check if an RLS policy exists on a table.
  */
 export async function policyExists(connectionString: string, policyName: string, tableName: string): Promise<boolean> {
-  const res = await execSql(
+  const res = await querySql(
     connectionString,
     `SELECT 1 FROM pg_policies
      WHERE schemaname = 'public' AND policyname = $1 AND tablename = $2`,
@@ -273,7 +207,7 @@ export async function policyExists(connectionString: string, policyName: string,
  * Check if row-level security is enabled on a table.
  */
 export async function rlsEnabled(connectionString: string, tableName: string): Promise<boolean> {
-  const res = await execSql(
+  const res = await querySql(
     connectionString,
     `SELECT c.relrowsecurity
      FROM pg_class c
@@ -288,7 +222,7 @@ export async function rlsEnabled(connectionString: string, tableName: string): P
  * Check if an enum type exists in the public schema.
  */
 export async function enumExists(connectionString: string, enumName: string): Promise<boolean> {
-  const res = await execSql(
+  const res = await querySql(
     connectionString,
     `SELECT 1 FROM pg_type t
      JOIN pg_namespace n ON t.typnamespace = n.oid
@@ -302,7 +236,7 @@ export async function enumExists(connectionString: string, enumName: string): Pr
  * Get values of an enum type.
  */
 export async function getEnumValues(connectionString: string, enumName: string): Promise<string[]> {
-  const res = await execSql(
+  const res = await querySql(
     connectionString,
     `SELECT e.enumlabel
      FROM pg_enum e
@@ -319,7 +253,7 @@ export async function getEnumValues(connectionString: string, enumName: string):
  * Check if a PostgreSQL extension is installed.
  */
 export async function extensionExists(connectionString: string, extName: string): Promise<boolean> {
-  const res = await execSql(connectionString, `SELECT 1 FROM pg_extension WHERE extname = $1`, [extName]);
+  const res = await querySql(connectionString, `SELECT 1 FROM pg_extension WHERE extname = $1`, [extName]);
   return res.rowCount !== null && res.rowCount > 0;
 }
 
@@ -327,7 +261,7 @@ export async function extensionExists(connectionString: string, extName: string)
  * Check if a view exists in the public schema.
  */
 export async function viewExists(connectionString: string, viewName: string): Promise<boolean> {
-  const res = await execSql(
+  const res = await querySql(
     connectionString,
     `SELECT 1 FROM information_schema.views
      WHERE table_schema = 'public' AND table_name = $1`,
@@ -340,7 +274,7 @@ export async function viewExists(connectionString: string, viewName: string): Pr
  * Check if a materialized view exists in the public schema.
  */
 export async function materializedViewExists(connectionString: string, mvName: string): Promise<boolean> {
-  const res = await execSql(
+  const res = await querySql(
     connectionString,
     `SELECT 1 FROM pg_matviews WHERE schemaname = 'public' AND matviewname = $1`,
     [mvName],
@@ -352,7 +286,7 @@ export async function materializedViewExists(connectionString: string, mvName: s
  * Check if an index exists.
  */
 export async function indexExists(connectionString: string, indexName: string): Promise<boolean> {
-  const res = await execSql(
+  const res = await querySql(
     connectionString,
     `SELECT 1 FROM pg_indexes WHERE schemaname = 'public' AND indexname = $1`,
     [indexName],
@@ -364,7 +298,7 @@ export async function indexExists(connectionString: string, indexName: string): 
  * Get the access method of an index (btree, gin, gist, etc.).
  */
 export async function getIndexMethod(connectionString: string, indexName: string): Promise<string> {
-  const res = await execSql(
+  const res = await querySql(
     connectionString,
     `SELECT am.amname
      FROM pg_index i
@@ -385,7 +319,7 @@ export async function getComment(
   columnName?: string,
 ): Promise<string | null> {
   if (columnName) {
-    const res = await execSql(
+    const res = await querySql(
       connectionString,
       `SELECT col_description(c.oid, a.attnum) AS comment
        FROM pg_class c
@@ -397,7 +331,7 @@ export async function getComment(
     return res.rows.length > 0 ? res.rows[0].comment : null;
   }
 
-  const res = await execSql(
+  const res = await querySql(
     connectionString,
     `SELECT obj_description(c.oid, 'pg_class') AS comment
      FROM pg_class c
@@ -412,7 +346,7 @@ export async function getComment(
  * Check if a constraint is deferrable.
  */
 export async function isConstraintDeferrable(connectionString: string, constraintName: string): Promise<boolean> {
-  const res = await execSql(connectionString, `SELECT condeferrable FROM pg_constraint WHERE conname = $1`, [
+  const res = await querySql(connectionString, `SELECT condeferrable FROM pg_constraint WHERE conname = $1`, [
     constraintName,
   ]);
   return res.rows.length > 0 && res.rows[0].condeferrable === true;
@@ -425,7 +359,7 @@ export async function isConstraintInitiallyDeferred(
   connectionString: string,
   constraintName: string,
 ): Promise<boolean> {
-  const res = await execSql(connectionString, `SELECT condeferred FROM pg_constraint WHERE conname = $1`, [
+  const res = await querySql(connectionString, `SELECT condeferred FROM pg_constraint WHERE conname = $1`, [
     constraintName,
   ]);
   return res.rows.length > 0 && res.rows[0].condeferred === true;
@@ -435,7 +369,7 @@ export async function isConstraintInitiallyDeferred(
  * Check if a constraint is validated (convalidated=true in pg_constraint).
  */
 export async function constraintValidated(connectionString: string, constraintName: string): Promise<boolean> {
-  const res = await execSql(connectionString, `SELECT convalidated FROM pg_constraint WHERE conname = $1`, [
+  const res = await querySql(connectionString, `SELECT convalidated FROM pg_constraint WHERE conname = $1`, [
     constraintName,
   ]);
   return res.rows.length > 0 && res.rows[0].convalidated === true;
@@ -445,7 +379,7 @@ export async function constraintValidated(connectionString: string, constraintNa
  * Check if a constraint exists.
  */
 export async function constraintExists(connectionString: string, constraintName: string): Promise<boolean> {
-  const res = await execSql(connectionString, `SELECT 1 FROM pg_constraint WHERE conname = $1`, [constraintName]);
+  const res = await querySql(connectionString, `SELECT 1 FROM pg_constraint WHERE conname = $1`, [constraintName]);
   return res.rowCount !== null && res.rowCount > 0;
 }
 
@@ -457,7 +391,7 @@ export async function columnIsNotNull(
   tableName: string,
   columnName: string,
 ): Promise<boolean> {
-  const res = await execSql(
+  const res = await querySql(
     connectionString,
     `SELECT is_nullable FROM information_schema.columns
      WHERE table_schema = 'public' AND table_name = $1 AND column_name = $2`,
@@ -470,7 +404,7 @@ export async function columnIsNotNull(
  * Get a comment on a view.
  */
 export async function getViewComment(connectionString: string, viewName: string): Promise<string | null> {
-  const res = await execSql(
+  const res = await querySql(
     connectionString,
     `SELECT obj_description(c.oid, 'pg_class') AS comment
      FROM pg_class c
@@ -485,7 +419,7 @@ export async function getViewComment(connectionString: string, viewName: string)
  * Get a comment on an enum type.
  */
 export async function getEnumComment(connectionString: string, enumName: string): Promise<string | null> {
-  const res = await execSql(
+  const res = await querySql(
     connectionString,
     `SELECT obj_description(t.oid, 'pg_type') AS comment
      FROM pg_type t
@@ -500,7 +434,7 @@ export async function getEnumComment(connectionString: string, enumName: string)
  * Get a comment on a function.
  */
 export async function getFunctionComment(connectionString: string, funcName: string): Promise<string | null> {
-  const res = await execSql(
+  const res = await querySql(
     connectionString,
     `SELECT obj_description(p.oid, 'pg_proc') AS comment
      FROM pg_proc p
@@ -516,7 +450,7 @@ export async function getFunctionComment(connectionString: string, funcName: str
  * Get a comment on an index.
  */
 export async function getIndexComment(connectionString: string, indexName: string): Promise<string | null> {
-  const res = await execSql(
+  const res = await querySql(
     connectionString,
     `SELECT obj_description(c.oid, 'pg_class') AS comment
      FROM pg_class c
@@ -535,7 +469,7 @@ export async function getTriggerComment(
   triggerName: string,
   tableName: string,
 ): Promise<string | null> {
-  const res = await execSql(
+  const res = await querySql(
     connectionString,
     `SELECT obj_description(t.oid, 'pg_trigger') AS comment
      FROM pg_trigger t
@@ -551,7 +485,7 @@ export async function getTriggerComment(
  * Get a comment on a constraint.
  */
 export async function getConstraintComment(connectionString: string, constraintName: string): Promise<string | null> {
-  const res = await execSql(
+  const res = await querySql(
     connectionString,
     `SELECT obj_description(c.oid, 'pg_constraint') AS comment
      FROM pg_constraint c
@@ -565,7 +499,7 @@ export async function getConstraintComment(connectionString: string, constraintN
  * Get a comment on a materialized view.
  */
 export async function getMaterializedViewComment(connectionString: string, mvName: string): Promise<string | null> {
-  const res = await execSql(
+  const res = await querySql(
     connectionString,
     `SELECT obj_description(c.oid, 'pg_class') AS comment
      FROM pg_class c
@@ -584,7 +518,7 @@ export async function getPolicyComment(
   policyName: string,
   tableName: string,
 ): Promise<string | null> {
-  const res = await execSql(
+  const res = await querySql(
     connectionString,
     `SELECT obj_description(p.oid, 'pg_policy') AS comment
      FROM pg_policy p
@@ -627,4 +561,19 @@ export function useTestProject(opts?: { closeAppPool?: () => Promise<void> }): {
   });
 
   return ctx;
+}
+
+// ---------------------------------------------------------------------------
+// Internal helper — all assertion helpers above use this instead of the
+// re-exported execSql so we avoid the top-level re-export creating a
+// runtime dependency loop.
+// ---------------------------------------------------------------------------
+
+async function querySql(connectionString: string, sql: string, params?: unknown[]): Promise<pg.QueryResult> {
+  const pool = new Pool({ connectionString, max: 1 });
+  try {
+    return await pool.query(sql, params);
+  } finally {
+    await pool.end();
+  }
 }

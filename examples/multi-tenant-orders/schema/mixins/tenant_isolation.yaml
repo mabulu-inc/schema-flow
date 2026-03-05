@@ -1,0 +1,37 @@
+# Mixin: tenant_isolation
+#
+# Adds a tenant_id column with a FK to the tenants table and a RESTRICTIVE
+# RLS policy that scopes every query to the current tenant.
+#
+# The RESTRICTIVE policy uses `to:` to list the tenant-bound roles.
+# Any role NOT in this list (e.g. app_admin) is exempt from the tenant
+# fence entirely — it never sees the restriction. Each table is then
+# responsible for adding a permissive policy granting app_admin access.
+#
+# This is the recommended PostgreSQL pattern for cross-tenant admin access:
+# explicit role scoping, no magic session variables, fully auditable in YAML.
+
+mixin: tenant_isolation
+
+rls: true
+force_rls: true
+
+columns:
+  - name: tenant_id
+    type: uuid
+    references:
+      table: tenants
+      column: id
+      on_delete: CASCADE
+
+indexes:
+  - name: idx_{table}_tenant
+    columns: [tenant_id]
+
+policies:
+  - name: "{table}_tenant_isolation"
+    for: ALL
+    permissive: false
+    to: [app_user, app_manager, app_auditor, app_service]
+    using: "tenant_id = current_setting('app.tenant_id')::uuid"
+    check: "tenant_id = current_setting('app.tenant_id')::uuid"

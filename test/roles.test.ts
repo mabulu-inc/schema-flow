@@ -59,10 +59,13 @@ async function getRoleMemberships(connectionString: string, roleName: string): P
 async function getTableGrants(connectionString: string, tableName: string, roleName: string): Promise<string[]> {
   const res = await execSql(
     connectionString,
-    `SELECT privilege_type
-     FROM information_schema.role_table_grants
-     WHERE table_schema = 'public' AND table_name = $1 AND grantee = $2
-     ORDER BY privilege_type`,
+    `SELECT p.privilege_type
+     FROM pg_class c
+     JOIN pg_namespace n ON n.oid = c.relnamespace
+     CROSS JOIN LATERAL aclexplode(c.relacl) AS p(grantor, grantee, privilege_type, is_grantable)
+     JOIN pg_roles r ON r.oid = p.grantee
+     WHERE n.nspname = 'public' AND c.relname = $1 AND r.rolname = $2
+     ORDER BY p.privilege_type`,
     [tableName, roleName],
   );
   return res.rows.map((r: { privilege_type: string }) => r.privilege_type);
@@ -745,5 +748,633 @@ columns:
     expect(grants).toContain("INSERT");
     expect(grants).toContain("UPDATE");
     expect(grants).toContain("DELETE");
+  });
+});
+
+// ─── View & Materialized View Grants ─────────────────────────────────────────
+
+describe("grants: view grants", () => {
+  const ctx = useTestProject({ closeAppPool: closePool });
+
+  it("grants privileges on a view", async () => {
+    writeSchema(
+      ctx.project.rolesDir,
+      "role_viewer.yaml",
+      `role: view_reader
+login: false
+`,
+    );
+
+    writeSchema(
+      ctx.project.tablesDir,
+      "items.yaml",
+      `table: items
+columns:
+  - name: id
+    type: serial
+    primary_key: true
+  - name: name
+    type: text
+`,
+    );
+
+    writeSchema(
+      ctx.project.viewsDir,
+      "active_items.yaml",
+      `view: active_items
+query: |
+  SELECT id, name FROM items
+grants:
+  - to: view_reader
+    privileges: [SELECT]
+`,
+    );
+
+    const config = resolveConfig({
+      connectionString: ctx.connectionString,
+      baseDir: ctx.project.baseDir,
+      dryRun: false,
+    });
+
+    const result = await runMigrate(config);
+    expect(result.success).toBe(true);
+
+    const grants = await getTableGrants(ctx.connectionString, "active_items", "view_reader");
+    expect(grants).toContain("SELECT");
+  });
+
+  it("is idempotent — granting view privileges twice succeeds", async () => {
+    writeSchema(
+      ctx.project.rolesDir,
+      "role_viewer.yaml",
+      `role: view_reader
+login: false
+`,
+    );
+
+    writeSchema(
+      ctx.project.tablesDir,
+      "items.yaml",
+      `table: items
+columns:
+  - name: id
+    type: serial
+    primary_key: true
+  - name: name
+    type: text
+`,
+    );
+
+    writeSchema(
+      ctx.project.viewsDir,
+      "active_items.yaml",
+      `view: active_items
+query: |
+  SELECT id, name FROM items
+grants:
+  - to: view_reader
+    privileges: [SELECT]
+`,
+    );
+
+    const config = resolveConfig({
+      connectionString: ctx.connectionString,
+      baseDir: ctx.project.baseDir,
+      dryRun: false,
+    });
+
+    const result1 = await runMigrate(config);
+    expect(result1.success).toBe(true);
+
+    const result2 = await runMigrate(config);
+    expect(result2.success).toBe(true);
+
+    const grants = await getTableGrants(ctx.connectionString, "active_items", "view_reader");
+    expect(grants).toContain("SELECT");
+  });
+
+  it("revokes removed view privileges with --allow-destructive", async () => {
+    writeSchema(
+      ctx.project.rolesDir,
+      "role_viewer.yaml",
+      `role: view_reader
+login: false
+`,
+    );
+
+    writeSchema(
+      ctx.project.tablesDir,
+      "items.yaml",
+      `table: items
+columns:
+  - name: id
+    type: serial
+    primary_key: true
+  - name: name
+    type: text
+`,
+    );
+
+    // Initial: grant SELECT and INSERT
+    writeSchema(
+      ctx.project.viewsDir,
+      "active_items.yaml",
+      `view: active_items
+query: |
+  SELECT id, name FROM items
+grants:
+  - to: view_reader
+    privileges: [SELECT, INSERT]
+`,
+    );
+
+    const config1 = resolveConfig({
+      connectionString: ctx.connectionString,
+      baseDir: ctx.project.baseDir,
+      dryRun: false,
+    });
+    const result1 = await runMigrate(config1);
+    expect(result1.success).toBe(true);
+
+    // Updated: remove INSERT
+    writeSchema(
+      ctx.project.viewsDir,
+      "active_items.yaml",
+      `view: active_items
+query: |
+  SELECT id, name FROM items
+grants:
+  - to: view_reader
+    privileges: [SELECT]
+`,
+    );
+
+    const config2 = resolveConfig({
+      connectionString: ctx.connectionString,
+      baseDir: ctx.project.baseDir,
+      dryRun: false,
+      allowDestructive: true,
+    });
+    const result2 = await runMigrate(config2);
+    expect(result2.success).toBe(true);
+
+    const grants = await getTableGrants(ctx.connectionString, "active_items", "view_reader");
+    expect(grants).toContain("SELECT");
+    expect(grants).not.toContain("INSERT");
+  });
+});
+
+describe("grants: materialized view grants", () => {
+  const ctx = useTestProject({ closeAppPool: closePool });
+
+  it("grants privileges on a materialized view", async () => {
+    writeSchema(
+      ctx.project.rolesDir,
+      "role_mv_reader.yaml",
+      `role: mv_reader
+login: false
+`,
+    );
+
+    writeSchema(
+      ctx.project.tablesDir,
+      "events.yaml",
+      `table: events
+columns:
+  - name: id
+    type: serial
+    primary_key: true
+  - name: kind
+    type: text
+`,
+    );
+
+    writeSchema(
+      ctx.project.viewsDir,
+      "mv_event_counts.yaml",
+      `materialized_view: event_counts
+query: |
+  SELECT kind, count(*) AS total FROM events GROUP BY kind
+grants:
+  - to: mv_reader
+    privileges: [SELECT]
+`,
+    );
+
+    const config = resolveConfig({
+      connectionString: ctx.connectionString,
+      baseDir: ctx.project.baseDir,
+      dryRun: false,
+    });
+
+    const result = await runMigrate(config);
+    expect(result.success).toBe(true);
+
+    const grants = await getTableGrants(ctx.connectionString, "event_counts", "mv_reader");
+    expect(grants).toContain("SELECT");
+  });
+});
+
+describe("grants: view grant drift detection", () => {
+  const ctx = useTestProject({ closeAppPool: closePool });
+
+  it("detects missing view grant", async () => {
+    writeSchema(
+      ctx.project.rolesDir,
+      "role_viewer.yaml",
+      `role: view_reader
+login: false
+`,
+    );
+
+    writeSchema(
+      ctx.project.tablesDir,
+      "items.yaml",
+      `table: items
+columns:
+  - name: id
+    type: serial
+    primary_key: true
+  - name: name
+    type: text
+`,
+    );
+
+    // Create the view without grants first
+    writeSchema(
+      ctx.project.viewsDir,
+      "active_items.yaml",
+      `view: active_items
+query: |
+  SELECT id, name FROM items
+`,
+    );
+
+    const config1 = resolveConfig({
+      connectionString: ctx.connectionString,
+      baseDir: ctx.project.baseDir,
+      dryRun: false,
+    });
+    const result = await runMigrate(config1);
+    expect(result.success).toBe(true);
+
+    // Now add grants to the YAML (but don't migrate)
+    writeSchema(
+      ctx.project.viewsDir,
+      "active_items.yaml",
+      `view: active_items
+query: |
+  SELECT id, name FROM items
+grants:
+  - to: view_reader
+    privileges: [SELECT]
+`,
+    );
+
+    const driftConfig = resolveConfig({ connectionString: ctx.connectionString, baseDir: ctx.project.baseDir });
+    const report = await detectDrift(driftConfig);
+
+    const grantItems = report.items.filter((i) => i.category === "grant");
+    expect(grantItems).toHaveLength(1);
+    expect(grantItems[0].name).toBe("SELECT → view_reader");
+  });
+
+  it("no drift after applying view grants", async () => {
+    writeSchema(
+      ctx.project.rolesDir,
+      "role_viewer.yaml",
+      `role: view_reader
+login: false
+`,
+    );
+
+    writeSchema(
+      ctx.project.tablesDir,
+      "items.yaml",
+      `table: items
+columns:
+  - name: id
+    type: serial
+    primary_key: true
+  - name: name
+    type: text
+`,
+    );
+
+    writeSchema(
+      ctx.project.viewsDir,
+      "active_items.yaml",
+      `view: active_items
+query: |
+  SELECT id, name FROM items
+grants:
+  - to: view_reader
+    privileges: [SELECT]
+`,
+    );
+
+    const config = resolveConfig({
+      connectionString: ctx.connectionString,
+      baseDir: ctx.project.baseDir,
+      dryRun: false,
+    });
+    const result = await runMigrate(config);
+    expect(result.success).toBe(true);
+
+    const driftConfig = resolveConfig({ connectionString: ctx.connectionString, baseDir: ctx.project.baseDir });
+    const report = await detectDrift(driftConfig);
+
+    const grantItems = report.items.filter((i) => i.category === "grant");
+    expect(grantItems).toHaveLength(0);
+  });
+});
+
+// ─── Auto Sequence Grants ────────────────────────────────────────────────────
+
+async function getSequenceGrants(connectionString: string, seqName: string, roleName: string): Promise<string[]> {
+  const res = await execSql(
+    connectionString,
+    `SELECT p.privilege_type
+     FROM pg_class c
+     JOIN pg_namespace n ON n.oid = c.relnamespace
+     CROSS JOIN LATERAL aclexplode(c.relacl) AS p(grantor, grantee, privilege_type, is_grantable)
+     JOIN pg_roles r ON r.oid = p.grantee
+     WHERE n.nspname = 'public' AND c.relname = $1 AND r.rolname = $2
+     ORDER BY p.privilege_type`,
+    [seqName, roleName],
+  );
+  return res.rows.map((r: { privilege_type: string }) => r.privilege_type);
+}
+
+describe("grants: auto sequence grants", () => {
+  const ctx = useTestProject({ closeAppPool: closePool });
+
+  it("auto-grants USAGE and SELECT on owned sequences when INSERT is granted", async () => {
+    writeSchema(
+      ctx.project.rolesDir,
+      "role_writer.yaml",
+      `role: seq_writer
+login: false
+`,
+    );
+
+    writeSchema(
+      ctx.project.tablesDir,
+      "items.yaml",
+      `table: items
+columns:
+  - name: id
+    type: serial
+    primary_key: true
+  - name: name
+    type: text
+grants:
+  - to: seq_writer
+    privileges: [SELECT, INSERT]
+`,
+    );
+
+    const config = resolveConfig({
+      connectionString: ctx.connectionString,
+      baseDir: ctx.project.baseDir,
+      dryRun: false,
+    });
+
+    const result = await runMigrate(config);
+    expect(result.success).toBe(true);
+
+    const seqGrants = await getSequenceGrants(ctx.connectionString, "items_id_seq", "seq_writer");
+    expect(seqGrants).toContain("USAGE");
+    expect(seqGrants).toContain("SELECT");
+  });
+
+  it("does not grant sequence privileges when only SELECT is granted (no INSERT)", async () => {
+    writeSchema(
+      ctx.project.rolesDir,
+      "role_reader.yaml",
+      `role: seq_reader
+login: false
+`,
+    );
+
+    writeSchema(
+      ctx.project.tablesDir,
+      "items.yaml",
+      `table: items
+columns:
+  - name: id
+    type: serial
+    primary_key: true
+  - name: name
+    type: text
+grants:
+  - to: seq_reader
+    privileges: [SELECT]
+`,
+    );
+
+    const config = resolveConfig({
+      connectionString: ctx.connectionString,
+      baseDir: ctx.project.baseDir,
+      dryRun: false,
+    });
+
+    const result = await runMigrate(config);
+    expect(result.success).toBe(true);
+
+    const seqGrants = await getSequenceGrants(ctx.connectionString, "items_id_seq", "seq_reader");
+    expect(seqGrants).not.toContain("USAGE");
+  });
+
+  it("auto-grants sequence privileges for ALL privilege", async () => {
+    writeSchema(
+      ctx.project.rolesDir,
+      "role_admin.yaml",
+      `role: seq_admin
+login: false
+`,
+    );
+
+    writeSchema(
+      ctx.project.tablesDir,
+      "items.yaml",
+      `table: items
+columns:
+  - name: id
+    type: serial
+    primary_key: true
+  - name: name
+    type: text
+grants:
+  - to: seq_admin
+    privileges: [ALL]
+`,
+    );
+
+    const config = resolveConfig({
+      connectionString: ctx.connectionString,
+      baseDir: ctx.project.baseDir,
+      dryRun: false,
+    });
+
+    const result = await runMigrate(config);
+    expect(result.success).toBe(true);
+
+    const seqGrants = await getSequenceGrants(ctx.connectionString, "items_id_seq", "seq_admin");
+    expect(seqGrants).toContain("USAGE");
+    expect(seqGrants).toContain("SELECT");
+  });
+
+  it("handles tables with multiple serial columns", async () => {
+    writeSchema(
+      ctx.project.rolesDir,
+      "role_multi.yaml",
+      `role: seq_multi
+login: false
+`,
+    );
+
+    writeSchema(
+      ctx.project.tablesDir,
+      "multi_seq.yaml",
+      `table: multi_seq
+columns:
+  - name: id
+    type: serial
+    primary_key: true
+  - name: code
+    type: serial
+  - name: name
+    type: text
+grants:
+  - to: seq_multi
+    privileges: [INSERT]
+`,
+    );
+
+    const config = resolveConfig({
+      connectionString: ctx.connectionString,
+      baseDir: ctx.project.baseDir,
+      dryRun: false,
+    });
+
+    const result = await runMigrate(config);
+    expect(result.success).toBe(true);
+
+    const idGrants = await getSequenceGrants(ctx.connectionString, "multi_seq_id_seq", "seq_multi");
+    expect(idGrants).toContain("USAGE");
+
+    const codeGrants = await getSequenceGrants(ctx.connectionString, "multi_seq_code_seq", "seq_multi");
+    expect(codeGrants).toContain("USAGE");
+  });
+
+  it("is idempotent — running twice succeeds", async () => {
+    writeSchema(
+      ctx.project.rolesDir,
+      "role_idem.yaml",
+      `role: seq_idem
+login: false
+`,
+    );
+
+    writeSchema(
+      ctx.project.tablesDir,
+      "items.yaml",
+      `table: items
+columns:
+  - name: id
+    type: serial
+    primary_key: true
+  - name: name
+    type: text
+grants:
+  - to: seq_idem
+    privileges: [SELECT, INSERT]
+`,
+    );
+
+    const config = resolveConfig({
+      connectionString: ctx.connectionString,
+      baseDir: ctx.project.baseDir,
+      dryRun: false,
+    });
+
+    const result1 = await runMigrate(config);
+    expect(result1.success).toBe(true);
+
+    const result2 = await runMigrate(config);
+    expect(result2.success).toBe(true);
+
+    const seqGrants = await getSequenceGrants(ctx.connectionString, "items_id_seq", "seq_idem");
+    expect(seqGrants).toContain("USAGE");
+    expect(seqGrants).toContain("SELECT");
+  });
+
+  it("revokes sequence privileges when INSERT is removed with --allow-destructive", async () => {
+    writeSchema(
+      ctx.project.rolesDir,
+      "role_revoke.yaml",
+      `role: seq_revoke
+login: false
+`,
+    );
+
+    // Initial: grant INSERT (triggers auto sequence grant)
+    writeSchema(
+      ctx.project.tablesDir,
+      "items.yaml",
+      `table: items
+columns:
+  - name: id
+    type: serial
+    primary_key: true
+  - name: name
+    type: text
+grants:
+  - to: seq_revoke
+    privileges: [SELECT, INSERT]
+`,
+    );
+
+    const config1 = resolveConfig({
+      connectionString: ctx.connectionString,
+      baseDir: ctx.project.baseDir,
+      dryRun: false,
+    });
+    const result1 = await runMigrate(config1);
+    expect(result1.success).toBe(true);
+
+    const seqBefore = await getSequenceGrants(ctx.connectionString, "items_id_seq", "seq_revoke");
+    expect(seqBefore).toContain("USAGE");
+
+    // Updated: remove INSERT, keep only SELECT
+    writeSchema(
+      ctx.project.tablesDir,
+      "items.yaml",
+      `table: items
+columns:
+  - name: id
+    type: serial
+    primary_key: true
+  - name: name
+    type: text
+grants:
+  - to: seq_revoke
+    privileges: [SELECT]
+`,
+    );
+
+    const config2 = resolveConfig({
+      connectionString: ctx.connectionString,
+      baseDir: ctx.project.baseDir,
+      dryRun: false,
+      allowDestructive: true,
+    });
+    const result2 = await runMigrate(config2);
+    expect(result2.success).toBe(true);
+
+    const seqAfter = await getSequenceGrants(ctx.connectionString, "items_id_seq", "seq_revoke");
+    expect(seqAfter).not.toContain("USAGE");
+    expect(seqAfter).not.toContain("SELECT");
   });
 });

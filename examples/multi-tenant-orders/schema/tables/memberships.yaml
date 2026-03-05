@@ -1,0 +1,94 @@
+# Schema for table: memberships
+#
+# Links a user to a tenant. A user can be a member of multiple tenants.
+# The membership_roles junction table tracks which roles the user holds
+# within this membership — see membership_roles.yaml.
+#
+# Uses tenant_isolation so members can only see co-members in the same tenant.
+
+table: memberships
+
+use: [tenant_isolation, auditable]
+
+columns:
+  - name: id
+    type: serial
+    primary_key: true
+
+  - name: user_id
+    type: integer
+    references:
+      table: users
+      column: id
+      on_delete: CASCADE
+
+  - name: status
+    type: membership_status
+    default: "'active'"
+
+  - name: invited_by
+    type: integer
+    nullable: true
+    references:
+      table: users
+      column: id
+
+  - name: invited_email
+    type: varchar(255)
+    nullable: true
+    comment: "For pre-registration invites — email may not match a user yet"
+
+indexes:
+  - columns: [user_id, tenant_id]
+    unique: true
+    comment: "One membership per user per tenant"
+
+  - columns: [invited_email]
+    where: "status = 'invited'"
+    comment: "Fast lookup for pending invitations"
+
+checks:
+  - name: chk_invite_has_email
+    expression: "status != 'invited' OR invited_email IS NOT NULL"
+
+policies:
+  - name: members_select_co_members
+    for: SELECT
+    to: [app_user, app_manager, app_auditor]
+    using: "true"
+
+  - name: managers_insert
+    for: INSERT
+    to: [app_manager]
+    check: "true"
+
+  - name: managers_update
+    for: UPDATE
+    to: [app_manager]
+    using: "true"
+    check: "true"
+
+  - name: service_all
+    for: ALL
+    to: [app_service]
+    using: "true"
+    check: "true"
+
+  - name: admin_full_access
+    for: ALL
+    to: [app_admin]
+    using: "true"
+    check: "true"
+
+grants:
+  - to: [app_user, app_auditor]
+    privileges: [SELECT]
+
+  - to: app_manager
+    privileges: [SELECT, INSERT, UPDATE]
+
+  - to: app_service
+    privileges: [SELECT, INSERT, UPDATE, DELETE]
+
+  - to: app_admin
+    privileges: [SELECT, INSERT, UPDATE, DELETE]

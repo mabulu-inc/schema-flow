@@ -1,0 +1,29 @@
+# View: published_articles
+# Public-facing view that joins articles with their author and category.
+# Only includes published, non-deleted articles.
+
+view: published_articles
+query: |
+  SELECT
+    a.id,
+    a.title,
+    a.slug,
+    a.excerpt,
+    a.body,
+    a.published_at,
+    a.featured_image_url,
+    a.metadata,
+    a.word_count,
+    u.display_name AS author_name,
+    c.name         AS category_name,
+    c.slug         AS category_slug
+  FROM articles a
+  JOIN users u      ON u.id = a.author_id
+  LEFT JOIN categories c ON c.id = a.category_id
+  WHERE a.status = 'published'
+    AND a.deleted_at IS NULL
+grants:
+  - to: [cms_author, cms_editor, cms_admin]
+    privileges: [SELECT]
+
+comment: "Published articles with author and category info"

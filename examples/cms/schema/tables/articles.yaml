@@ -1,0 +1,153 @@
+# Schema for table: articles
+# The core content table. Demonstrates most schema-flow features:
+# enums, FKs, generated columns, GIN indexes, RLS with multiple
+# roles, check constraints, and soft delete.
+
+table: articles
+
+use: [auditable, soft_delete]
+
+rls: true
+
+columns:
+  - name: id
+    type: serial
+    primary_key: true
+
+  - name: title
+    type: varchar(255)
+
+  - name: slug
+    type: varchar(255)
+    unique: true
+
+  - name: excerpt
+    type: varchar(500)
+    nullable: true
+
+  - name: body
+    type: text
+    nullable: true
+
+  - name: author_id
+    type: integer
+    references:
+      table: users
+      column: id
+      on_delete: CASCADE
+
+  - name: category_id
+    type: integer
+    nullable: true
+    references:
+      table: categories
+      column: id
+      on_delete: SET NULL
+
+  - name: status
+    type: article_status
+    default: "'draft'"
+
+  - name: published_at
+    type: timestamptz
+    nullable: true
+
+  - name: featured_image_url
+    type: text
+    nullable: true
+
+  - name: metadata
+    type: jsonb
+    default: "'{}'::jsonb"
+    comment: "Arbitrary key-value data (SEO fields, Open Graph, etc.)"
+
+  - name: word_count
+    type: integer
+    default: "0"
+
+indexes:
+  - columns: [author_id]
+
+  - columns: [category_id]
+
+  - columns: [slug]
+    unique: true
+
+  - columns: [status, published_at]
+    where: "deleted_at IS NULL"
+    comment: "Find published articles, newest first"
+
+  - columns: [metadata]
+    method: gin
+    opclass: jsonb_path_ops
+    comment: "Fast JSONB containment queries"
+
+  - columns: [title]
+    method: gin
+    opclass: gin_trgm_ops
+    comment: "Trigram index for title search"
+
+checks:
+  - name: chk_title_not_empty
+    expression: "length(trim(title)) > 0"
+
+  - name: chk_slug_format
+    expression: "slug ~ '^[a-z0-9]+(-[a-z0-9]+)*$'"
+
+  - name: chk_published_has_date
+    expression: "(status != 'published') OR (published_at IS NOT NULL)"
+
+  - name: chk_word_count_positive
+    expression: "word_count >= 0"
+
+policies:
+  # Authors: full control over their own articles
+  - name: authors_select_own
+    for: SELECT
+    to: [cms_author]
+    using: "author_id = get_current_user_id() AND deleted_at IS NULL"
+
+  - name: authors_insert_own
+    for: INSERT
+    to: [cms_author]
+    check: "author_id = get_current_user_id()"
+
+  - name: authors_update_own
+    for: UPDATE
+    to: [cms_author]
+    using: "author_id = get_current_user_id()"
+    check: "author_id = get_current_user_id()"
+
+  - name: authors_delete_own
+    for: DELETE
+    to: [cms_author]
+    using: "author_id = get_current_user_id() AND status = 'draft'"
+
+  # Editors: read and edit all articles, but cannot delete
+  - name: editors_select_all
+    for: SELECT
+    to: [cms_editor]
+    using: "deleted_at IS NULL"
+
+  - name: editors_update_all
+    for: UPDATE
+    to: [cms_editor]
+    using: "true"
+    check: "true"
+
+  # Admins: unrestricted access
+  - name: admins_all
+    for: ALL
+    to: [cms_admin]
+    using: "true"
+    check: "true"
+
+grants:
+  - to: cms_author
+    privileges: [SELECT, INSERT, UPDATE, DELETE]
+
+  - to: cms_editor
+    privileges: [SELECT, UPDATE]
+
+  - to: cms_admin
+    privileges: [SELECT, INSERT, UPDATE, DELETE]

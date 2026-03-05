@@ -1,0 +1,4 @@
+# Service role — backend processes with full access within the tenant.
+
+role: app_service
+login: false

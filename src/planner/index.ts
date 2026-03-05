@@ -40,6 +40,8 @@ import {
   getExistingRoles,
   getTableGrants as introspectTableGrants,
   getColumnGrants as introspectColumnGrants,
+  getOwnedSequences,
+  getSequenceGrants as introspectSequenceGrants,
   type ParsedIndex,
 } from "../introspect/index.js";
 import { logger } from "../core/logger.js";
@@ -88,7 +90,9 @@ export type OperationType =
   | "grant_table"
   | "grant_column"
   | "revoke_table"
-  | "revoke_column";
+  | "revoke_column"
+  | "grant_sequence"
+  | "revoke_sequence";
 
 export interface Operation {
   type: OperationType;
@@ -183,7 +187,7 @@ export async function buildPlan(
   // Plan grants (after tables are created/altered, roles exist)
   for (const desired of desiredSchemas) {
     if (desired.grants && desired.grants.length > 0) {
-      const grantOps = await planGrantDiff(client, desired.table, desired.grants, pgSchema);
+      const grantOps = await planGrantDiff(client, desired.table, desired.grants, pgSchema, desired.columns);
       allOps.push(...grantOps);
     }
   }
@@ -198,6 +202,26 @@ export async function buildPlan(
   if (options.materializedViews) {
     const mvOps = await planMaterializedViews(client, options.materializedViews, pgSchema);
     allOps.push(...mvOps);
+  }
+
+  // Plan grants for views (after views are created)
+  if (options.views) {
+    for (const view of options.views) {
+      if (view.grants && view.grants.length > 0) {
+        const grantOps = await planGrantDiff(client, view.name, view.grants, pgSchema);
+        allOps.push(...grantOps);
+      }
+    }
+  }
+
+  // Plan grants for materialized views (after MVs are created)
+  if (options.materializedViews) {
+    for (const mv of options.materializedViews) {
+      if (mv.grants && mv.grants.length > 0) {
+        const grantOps = await planGrantDiff(client, mv.name, mv.grants, pgSchema);
+        allOps.push(...grantOps);
+      }
+    }
   }
 
   // Detect tables in DB that have no corresponding schema file (orphan detection)
@@ -1797,6 +1821,7 @@ async function planGrantDiff(
   tableName: string,
   desiredGrants: GrantDef[],
   pgSchema: string,
+  columns?: ColumnDef[],
 ): Promise<Operation[]> {
   const ops: Operation[] = [];
 
@@ -1908,6 +1933,79 @@ async function planGrantDiff(
             phase: "structure",
             destructive: true,
           });
+        }
+      }
+    }
+  }
+
+  // ─── Auto sequence grants ─────────────────────────────────────────────────
+  // When INSERT or ALL is granted on a table, auto-grant USAGE + SELECT on
+  // owned sequences (serial/bigserial columns). Without this, INSERT fails
+  // because the role can't advance the sequence.
+  // Introspect owned sequences from DB; fall back to deriving from column defs
+  // (needed for new tables where the table doesn't exist in DB yet)
+  let ownedSeqs = await getOwnedSequences(client, tableName, pgSchema);
+  if (ownedSeqs.length === 0 && columns) {
+    const serialTypes = new Set(["serial", "bigserial", "smallserial"]);
+    ownedSeqs = columns.filter((c) => serialTypes.has(c.type.toLowerCase())).map((c) => `${tableName}_${c.name}_seq`);
+  }
+  if (ownedSeqs.length > 0) {
+    // Collect roles that need sequence access (have INSERT or ALL)
+    const rolesNeedingSeqs = new Set<string>();
+    for (const [role, privs] of desiredTablePrivs) {
+      if (privs.has("INSERT") || privs.has("ALL")) {
+        rolesNeedingSeqs.add(role);
+      }
+    }
+
+    // Collect roles that previously had sequence access but no longer need it
+    const rolesLosingSeqs = new Set<string>();
+    for (const [role] of existingTableMap) {
+      const hadInsert = existingTableMap.get(role)?.has("INSERT") || existingTableMap.get(role)?.has("ALL");
+      if (hadInsert && !rolesNeedingSeqs.has(role)) {
+        rolesLosingSeqs.add(role);
+      }
+    }
+
+    for (const seqName of ownedSeqs) {
+      const existingSeqGrants = await introspectSequenceGrants(client, seqName, pgSchema);
+      const existingSeqMap = new Map<string, Set<string>>();
+      for (const g of existingSeqGrants) {
+        if (!existingSeqMap.has(g.grantee)) existingSeqMap.set(g.grantee, new Set());
+        existingSeqMap.get(g.grantee)!.add(g.privilege_type);
+      }
+
+      // Grant USAGE + SELECT to roles that need it
+      for (const role of rolesNeedingSeqs) {
+        const existing = existingSeqMap.get(role);
+        for (const seqPriv of ["USAGE", "SELECT"]) {
+          if (!existing?.has(seqPriv)) {
+            ops.push({
+              type: "grant_sequence",
+              table: tableName,
+              sql: `GRANT ${seqPriv} ON SEQUENCE "${pgSchema}"."${seqName}" TO "${role}";`,
+              description: `Grant ${seqPriv} on sequence ${seqName} to ${role} (auto: table INSERT)`,
+              phase: "structure",
+              destructive: false,
+            });
+          }
+        }
+      }
+
+      // Revoke from roles that lost INSERT
+      for (const role of rolesLosingSeqs) {
+        const existing = existingSeqMap.get(role);
+        if (existing) {
+          for (const seqPriv of existing) {
+            ops.push({
+              type: "revoke_sequence",
+              table: tableName,
+              sql: `REVOKE ${seqPriv} ON SEQUENCE "${pgSchema}"."${seqName}" FROM "${role}";`,
+              description: `Revoke ${seqPriv} on sequence ${seqName} from ${role} (auto: table INSERT removed)`,
+              phase: "structure",
+              destructive: true,
+            });
+          }
         }
       }
     }

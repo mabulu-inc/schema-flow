@@ -671,6 +671,34 @@ export async function detectDrift(config: SchemaFlowConfig): Promise<DriftReport
         }
       }
     }
+
+    // ─── View & Materialized View grant drift ────────────────────────────
+    const allViewGrants = [
+      ...parsedViews.map((v) => ({ name: v.name, grants: v.grants })),
+      ...parsedMvs.map((v) => ({ name: v.name, grants: v.grants })),
+    ];
+    for (const { name: viewName, grants } of allViewGrants) {
+      if (!grants || grants.length === 0) continue;
+      const existingGrantRows = await introspectTableGrants(client, viewName, config.pgSchema);
+
+      for (const grant of grants) {
+        const roles = Array.isArray(grant.to) ? grant.to : [grant.to];
+        for (const role of roles) {
+          for (const priv of grant.privileges) {
+            const found = existingGrantRows.some((g) => g.grantee === role && g.privilege_type === priv);
+            if (!found) {
+              items.push({
+                category: "grant",
+                direction: "missing_from_db",
+                table: viewName,
+                name: `${priv} → ${role}`,
+                description: `GRANT ${priv} ON ${viewName} TO ${role} missing from database`,
+              });
+            }
+          }
+        }
+      }
+    }
   });
 
   const extraInDb = items.filter((i) => i.direction === "extra_in_db").length;

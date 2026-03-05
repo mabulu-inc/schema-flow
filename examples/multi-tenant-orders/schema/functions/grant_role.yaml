@@ -1,0 +1,48 @@
+# Function: grant_role
+#
+# Adds a role to an existing membership. Idempotent — granting a role
+# the user already has is a no-op (ON CONFLICT DO NOTHING).
+#
+# Authorization:
+#   - System roles (no active session): always allowed
+#   - Tenant-bound roles: requires 'admin' in app.roles
+#
+# The granted_by field is set automatically from the current session.
+#
+# SECURITY DEFINER: writes to tenant-scoped tables.
+
+name: grant_role
+language: plpgsql
+returns: void
+security: definer
+args: "p_user_id integer, p_tenant_id uuid, p_role text"
+body: |
+  DECLARE
+    v_membership_id integer;
+    v_caller_roles text;
+  BEGIN
+    -- Authorization: tenant admins or system roles only
+    v_caller_roles := current_setting('app.roles', true);
+    IF v_caller_roles IS NOT NULL AND v_caller_roles != '' THEN
+      IF NOT ('admin' = ANY(string_to_array(v_caller_roles, ','))) THEN
+        RAISE EXCEPTION 'Requires tenant admin role';
+      END IF;
+      IF current_setting('app.tenant_id', true) != p_tenant_id::text THEN
+        RAISE EXCEPTION 'Cannot manage roles in another tenant';
+      END IF;
+    END IF;
+
+    SELECT m.id INTO v_membership_id
+    FROM memberships m
+    WHERE m.user_id = p_user_id
+      AND m.tenant_id = p_tenant_id
+      AND m.status = 'active';
+
+    IF v_membership_id IS NULL THEN
+      RAISE EXCEPTION 'No active membership for user % in tenant %', p_user_id, p_tenant_id;
+    END IF;
+
+    INSERT INTO membership_roles (membership_id, tenant_id, role, granted_by)
+    VALUES (v_membership_id, p_tenant_id, p_role::membership_role, current_setting('app.user_id', true)::int)
+    ON CONFLICT (membership_id, role) DO NOTHING;
+  END;

@@ -1,0 +1,89 @@
+# Schema for table: comments
+# Reader comments on published articles.
+# Threaded via parent_id (self-referencing FK).
+
+table: comments
+
+use: [auditable, soft_delete]
+
+rls: true
+
+columns:
+  - name: id
+    type: serial
+    primary_key: true
+
+  - name: article_id
+    type: integer
+    references:
+      table: articles
+      column: id
+      on_delete: CASCADE
+
+  - name: author_name
+    type: varchar(100)
+
+  - name: author_email
+    type: varchar(255)
+
+  - name: body
+    type: text
+
+  - name: parent_id
+    type: integer
+    nullable: true
+    references:
+      table: comments
+      column: id
+      on_delete: CASCADE
+
+  - name: is_approved
+    type: boolean
+    default: "false"
+
+indexes:
+  - columns: [article_id, created_at]
+    where: "is_approved = true AND deleted_at IS NULL"
+    comment: "Approved comments for an article, in order"
+
+  - columns: [parent_id]
+
+  - columns: [is_approved]
+    where: "is_approved = false AND deleted_at IS NULL"
+    comment: "Pending moderation queue"
+
+checks:
+  - name: chk_comment_body_not_empty
+    expression: "length(trim(body)) > 0"
+
+  - name: chk_comment_email_format
+    expression: "author_email ~* '^[^@]+@[^@]+\\.[^@]+$'"
+
+  - name: chk_no_self_reply
+    expression: "parent_id IS DISTINCT FROM id"
+
+policies:
+  # Editors moderate comments
+  - name: editors_read_all_comments
+    for: SELECT
+    to: [cms_editor, cms_admin]
+    using: "deleted_at IS NULL"
+
+  - name: editors_manage_comments
+    for: ALL
+    to: [cms_editor, cms_admin]
+    using: "true"
+    check: "true"
+
+  # Authors see approved comments on their own articles
+  - name: authors_see_own_article_comments
+    for: SELECT
+    to: [cms_author]
+    using: "is_approved = true AND deleted_at IS NULL AND EXISTS (SELECT 1 FROM articles WHERE id = article_id AND author_id = get_current_user_id())"
+
+grants:
+  - to: cms_author
+    privileges: [SELECT]
+
+  - to: [cms_editor, cms_admin]
+    privileges: [SELECT, INSERT, UPDATE, DELETE]

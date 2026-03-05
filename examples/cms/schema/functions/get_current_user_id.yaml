@@ -1,0 +1,10 @@
+# Function: get_current_user_id
+# Reads the app.user_id session variable set by the application layer.
+# Used in RLS policies to scope rows to the current user.
+
+name: get_current_user_id
+language: sql
+returns: integer
+security: definer
+body: |
+  SELECT current_setting('app.user_id')::integer;

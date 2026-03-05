@@ -1,0 +1,5 @@
+# Enum: priority
+# Task urgency levels for sorting and filtering.
+
+enum: priority
+values: [low, medium, high, urgent]

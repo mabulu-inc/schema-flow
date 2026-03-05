@@ -1,0 +1,38 @@
+# Materialized view: article_stats
+# Pre-computed per-article metrics for dashboards.
+# Refresh periodically or after bulk operations.
+
+materialized_view: article_stats
+query: |
+  SELECT
+    a.id            AS article_id,
+    a.title,
+    a.status,
+    a.author_id,
+    u.display_name  AS author_name,
+    a.published_at,
+    a.word_count,
+    count(DISTINCT at2.tag_id)   AS tag_count,
+    count(DISTINCT c.id)         AS comment_count,
+    count(DISTINCT ar.id)        AS revision_count
+  FROM articles a
+  JOIN users u                    ON u.id = a.author_id
+  LEFT JOIN article_tags at2      ON at2.article_id = a.id
+  LEFT JOIN comments c            ON c.article_id = a.id AND c.is_approved = true AND c.deleted_at IS NULL
+  LEFT JOIN article_revisions ar  ON ar.article_id = a.id
+  WHERE a.deleted_at IS NULL
+  GROUP BY a.id, a.title, a.status, a.author_id, u.display_name, a.published_at, a.word_count
+
+indexes:
+  - columns: [article_id]
+    unique: true
+
+  - columns: [author_id]
+
+  - columns: [status, published_at]
+
+grants:
+  - to: [cms_editor, cms_admin]
+    privileges: [SELECT]
+
+comment: "Per-article aggregate stats"

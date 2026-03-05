@@ -1,0 +1,58 @@
+# Function: create_membership
+#
+# Creates a membership linking a user to a tenant and assigns initial roles.
+# Called during signup (by app_service) or by a tenant admin inviting someone.
+#
+# Authorization:
+#   - System roles (no active session): always allowed
+#   - Tenant-bound roles: requires 'admin' in app.roles for the target tenant
+#
+# SECURITY DEFINER: needs to write to tenant-scoped tables without an
+# active session (e.g. during registration).
+
+name: create_membership
+language: plpgsql
+returns: integer
+security: definer
+args: "p_user_id integer, p_tenant_id uuid, p_roles text[], p_invited_by integer DEFAULT NULL"
+body: |
+  DECLARE
+    v_membership_id integer;
+    v_role text;
+    v_caller_roles text;
+  BEGIN
+    -- Authorization: tenant admins or system roles only
+    v_caller_roles := current_setting('app.roles', true);
+    IF v_caller_roles IS NOT NULL AND v_caller_roles != '' THEN
+      IF NOT ('admin' = ANY(string_to_array(v_caller_roles, ','))) THEN
+        RAISE EXCEPTION 'Requires tenant admin role';
+      END IF;
+      -- Tenant admin must be operating in the same tenant
+      IF current_setting('app.tenant_id', true) != p_tenant_id::text THEN
+        RAISE EXCEPTION 'Cannot create memberships in another tenant';
+      END IF;
+    END IF;
+
+    -- Validate tenant exists and is active
+    IF NOT EXISTS (SELECT 1 FROM tenants WHERE id = p_tenant_id AND is_active = true) THEN
+      RAISE EXCEPTION 'Tenant % does not exist or is inactive', p_tenant_id;
+    END IF;
+
+    -- Validate user exists
+    IF NOT EXISTS (SELECT 1 FROM users WHERE id = p_user_id) THEN
+      RAISE EXCEPTION 'User % does not exist', p_user_id;
+    END IF;
+
+    -- Create membership
+    INSERT INTO memberships (user_id, tenant_id, status, invited_by)
+    VALUES (p_user_id, p_tenant_id, 'active', COALESCE(p_invited_by, current_setting('app.user_id', true)::int))
+    RETURNING id INTO v_membership_id;
+
+    -- Assign each role
+    FOREACH v_role IN ARRAY p_roles LOOP
+      INSERT INTO membership_roles (membership_id, tenant_id, role, granted_by)
+      VALUES (v_membership_id, p_tenant_id, v_role::membership_role, current_setting('app.user_id', true)::int);
+    END LOOP;
+
+    RETURN v_membership_id;
+  END;

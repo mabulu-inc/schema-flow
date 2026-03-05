@@ -1,0 +1,7 @@
+# Extensions required by the CMS schema.
+# pg_trgm enables trigram indexes for fast LIKE/ILIKE searches.
+# pgcrypto provides gen_random_uuid() for media tokens.
+
+extensions:
+  - pgcrypto
+  - pg_trgm

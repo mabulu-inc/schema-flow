@@ -1090,20 +1090,26 @@ export interface DbColumnGrant {
   is_grantable: string;
 }
 
-/** Get table-level grants for a specific table (excludes owner grants) */
+/** Get table-level grants for a relation — tables, views, and materialized views (excludes owner grants) */
 export async function getTableGrants(
   client: pg.PoolClient,
   tableName: string,
   pgSchema: string,
 ): Promise<DbTableGrant[]> {
   const res = await client.query<DbTableGrant>(
-    `SELECT grantee, privilege_type, is_grantable
-     FROM information_schema.role_table_grants
-     WHERE table_schema = $1 AND table_name = $2
-       AND grantor = grantee IS FALSE
-       AND grantee != 'postgres'
-       AND grantee NOT LIKE 'pg_%'
-     ORDER BY grantee, privilege_type`,
+    `SELECT
+       r.rolname AS grantee,
+       p.privilege_type,
+       CASE WHEN p.is_grantable THEN 'YES' ELSE 'NO' END AS is_grantable
+     FROM pg_class c
+     JOIN pg_namespace n ON n.oid = c.relnamespace
+     CROSS JOIN LATERAL aclexplode(c.relacl) AS p(grantor, grantee, privilege_type, is_grantable)
+     JOIN pg_roles r ON r.oid = p.grantee
+     WHERE n.nspname = $1 AND c.relname = $2
+       AND p.grantor != p.grantee
+       AND r.rolname != 'postgres'
+       AND r.rolname NOT LIKE 'pg_%'
+     ORDER BY r.rolname, p.privilege_type`,
     [pgSchema, tableName],
   );
   return res.rows;
@@ -1124,6 +1130,50 @@ export async function getColumnGrants(
        AND grantee NOT LIKE 'pg_%'
      ORDER BY grantee, column_name, privilege_type`,
     [pgSchema, tableName],
+  );
+  return res.rows;
+}
+
+/** Get sequence names owned by a table's columns (serial/bigserial) */
+export async function getOwnedSequences(client: pg.PoolClient, tableName: string, pgSchema: string): Promise<string[]> {
+  const res = await client.query<{ sequence_name: string }>(
+    `SELECT s.relname AS sequence_name
+     FROM pg_class s
+     JOIN pg_depend d ON d.objid = s.oid
+     JOIN pg_class t ON d.refobjid = t.oid
+     JOIN pg_namespace n ON t.relnamespace = n.oid
+     WHERE s.relkind = 'S'
+       AND d.deptype = 'a'
+       AND n.nspname = $1
+       AND t.relname = $2
+     ORDER BY s.relname`,
+    [pgSchema, tableName],
+  );
+  return res.rows.map((r) => r.sequence_name);
+}
+
+/** Get grants on a specific sequence (excludes owner grants) */
+export async function getSequenceGrants(
+  client: pg.PoolClient,
+  seqName: string,
+  pgSchema: string,
+): Promise<DbTableGrant[]> {
+  const res = await client.query<DbTableGrant>(
+    `SELECT
+       r.rolname AS grantee,
+       p.privilege_type,
+       CASE WHEN p.is_grantable THEN 'YES' ELSE 'NO' END AS is_grantable
+     FROM pg_class c
+     JOIN pg_namespace n ON n.oid = c.relnamespace
+     CROSS JOIN LATERAL aclexplode(c.relacl) AS p(grantor, grantee, privilege_type, is_grantable)
+     JOIN pg_roles r ON r.oid = p.grantee
+     WHERE n.nspname = $1 AND c.relname = $2
+       AND c.relkind = 'S'
+       AND p.grantor != p.grantee
+       AND r.rolname != 'postgres'
+       AND r.rolname NOT LIKE 'pg_%'
+     ORDER BY r.rolname, p.privilege_type`,
+    [pgSchema, seqName],
   );
   return res.rows;
 }

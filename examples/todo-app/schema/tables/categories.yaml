@@ -1,0 +1,28 @@
+# Schema for table: categories
+# Simple grouping for todos (e.g. "Work", "Personal", "Shopping").
+
+table: categories
+
+use: [timestamps]
+
+columns:
+  - name: id
+    type: serial
+    primary_key: true
+
+  - name: name
+    type: varchar(100)
+    unique: true
+
+  - name: color
+    type: varchar(7)
+    default: "'#6B7280'"
+    comment: "Hex color code for UI display"
+
+  - name: position
+    type: integer
+    default: "0"
+
+checks:
+  - name: chk_color_hex
+    expression: "color ~* '^#[0-9a-f]{6}$'"

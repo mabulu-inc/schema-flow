@@ -334,6 +334,9 @@ export function parseViewFile(filePath: string): ViewSchema {
     name: String(raw.view),
     query: String(raw.query),
   };
+  if (raw.grants && Array.isArray(raw.grants)) {
+    result.grants = raw.grants.map((g: Record<string, unknown>) => parseGrantDef(g, filePath));
+  }
   if (raw.comment) result.comment = String(raw.comment);
   return result;
 }
@@ -357,6 +360,10 @@ export function parseMaterializedViewFile(filePath: string): MaterializedViewSch
 
   if (raw.indexes && Array.isArray(raw.indexes)) {
     mv.indexes = raw.indexes;
+  }
+
+  if (raw.grants && Array.isArray(raw.grants)) {
+    mv.grants = raw.grants.map((g: Record<string, unknown>) => parseGrantDef(g, filePath));
   }
 
   if (raw.comment) mv.comment = String(raw.comment);

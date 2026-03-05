@@ -1,0 +1,4 @@
+# Manager — full read/write on all orders within the tenant.
+
+role: app_manager
+login: false

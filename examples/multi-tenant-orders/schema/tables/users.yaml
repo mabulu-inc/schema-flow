@@ -1,0 +1,74 @@
+# Schema for table: users
+#
+# Global user identities — NOT tenant-scoped.
+#
+# Users exist independently of tenants. The memberships table maps
+# users to tenants with modular roles. This allows a single user to
+# be a member of multiple tenants with different roles in each.
+#
+# RLS restricts visibility: users can only see themselves and other
+# users who share a tenant (via active memberships).
+
+table: users
+
+rls: true
+force_rls: true
+
+use: [auditable]
+
+columns:
+  - name: id
+    type: serial
+    primary_key: true
+
+  - name: email
+    type: varchar(255)
+    unique: true
+
+  - name: display_name
+    type: varchar(100)
+
+indexes:
+  - columns: [email]
+    unique: true
+
+checks:
+  - name: chk_email_format
+    expression: "email ~* '^[^@]+@[^@]+\\.[^@]+$'"
+
+policies:
+  # Users can see themselves and co-members of the current tenant
+  - name: users_select_co_members
+    for: SELECT
+    to: [app_user, app_manager, app_auditor]
+    using: >-
+      id = current_setting('app.user_id')::int
+      OR id IN (
+        SELECT m.user_id FROM memberships m
+        WHERE m.tenant_id = current_setting('app.tenant_id')::uuid
+        AND m.status = 'active'
+      )
+
+  # Service: full access (handles registration, provisioning)
+  - name: service_all
+    for: ALL
+    to: [app_service]
+    using: "true"
+    check: "true"
+
+  # Platform admin: cross-tenant access
+  - name: admin_full_access
+    for: ALL
+    to: [app_admin]
+    using: "true"
+    check: "true"
+
+grants:
+  - to: [app_user, app_manager, app_auditor]
+    privileges: [SELECT]
+
+  - to: app_service
+    privileges: [SELECT, INSERT, UPDATE]
+
+  - to: app_admin
+    privileges: [SELECT, INSERT, UPDATE, DELETE]

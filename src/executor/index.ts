@@ -248,7 +248,7 @@ export async function runMigrate(config: SchemaFlowConfig): Promise<ExecutionRes
           };
         }
 
-        // Parse and apply function files first
+        // Parse function files (applied after plan execution, once enums/tables exist)
         const parsedFunctions: FunctionSchema[] = [];
         for (const f of functionFiles) {
           try {
@@ -269,44 +269,6 @@ export async function runMigrate(config: SchemaFlowConfig): Promise<ExecutionRes
             dryRun: config.dryRun,
             blockedDestructive: 0,
           };
-        }
-
-        // Apply functions before building plan
-        if (parsedFunctions.length > 0) {
-          if (config.dryRun) {
-            for (const fn of parsedFunctions) {
-              logger.info(`  [DRY RUN] Would create function: ${fn.name}`);
-            }
-          } else {
-            await client.query("BEGIN");
-            for (const fn of parsedFunctions) {
-              const replaceClause = fn.replace ? "OR REPLACE " : "";
-              const argsClause = fn.args ? `(${fn.args})` : "()";
-              const securityClause = fn.security === "definer" ? " SECURITY DEFINER" : "";
-              const sql = `CREATE ${replaceClause}FUNCTION ${fn.name}${argsClause} RETURNS ${fn.returns} LANGUAGE ${fn.language}${securityClause} AS $fn_body$\n${fn.body}\n$fn_body$;`;
-              logger.debug(`Creating function: ${fn.name}`);
-              try {
-                await client.query(sql);
-              } catch (fnErr) {
-                const pgMsg = fnErr instanceof Error ? fnErr.message : String(fnErr);
-                throw new Error(`Create function ${fn.name}\n  SQL: ${sql}\n  Error: ${pgMsg}`, { cause: fnErr });
-              }
-            }
-            // Apply function comments
-            for (const fn of parsedFunctions) {
-              if (fn.comment) {
-                const argsClause = fn.args ? `(${fn.args})` : "()";
-                const currentComment = await getFunctionComment(client, fn.name, config.pgSchema);
-                if (fn.comment !== currentComment) {
-                  const escapedComment = fn.comment.replace(/'/g, "''");
-                  await client.query(`COMMENT ON FUNCTION ${fn.name}${argsClause} IS '${escapedComment}';`);
-                  logger.debug(`Set comment on function: ${fn.name}`);
-                }
-              }
-            }
-            await client.query("COMMIT");
-            logger.info(`Applied ${parsedFunctions.length} function(s)`);
-          }
         }
 
         // Parse ALL table schema files (not just changed ones) to build complete picture for FK resolution
@@ -444,7 +406,7 @@ export async function runMigrate(config: SchemaFlowConfig): Promise<ExecutionRes
 
         const plan = await buildPlan(client, expandedSchemas, config.pgSchema, planOptions);
 
-        if (plan.operations.length === 0 && plan.blocked.length === 0) {
+        if (plan.operations.length === 0 && plan.blocked.length === 0 && parsedFunctions.length === 0) {
           logger.success("Database matches desired schema — nothing to do");
           // Update tracking for changed files (content changed but schema matches)
           if (!config.dryRun) {
@@ -494,12 +456,16 @@ export async function runMigrate(config: SchemaFlowConfig): Promise<ExecutionRes
         }
 
         if (config.dryRun) {
+          for (const fn of parsedFunctions) {
+            logger.info(`  [DRY RUN] Would create function: ${fn.name}`);
+          }
+          const totalOps = plan.operations.length + parsedFunctions.length;
           const suffix = plan.blocked.length > 0 ? ` (${plan.blocked.length} destructive operations blocked)` : "";
-          logger.info(`Dry run complete — ${plan.operations.length} operations would be executed${suffix}`);
+          logger.info(`Dry run complete — ${totalOps} operations would be executed${suffix}`);
           return {
             phase: "migrate",
             success: true,
-            operationsExecuted: plan.operations.length,
+            operationsExecuted: totalOps,
             errors: [],
             dryRun: true,
             blockedDestructive: plan.blocked.length,
@@ -515,8 +481,8 @@ export async function runMigrate(config: SchemaFlowConfig): Promise<ExecutionRes
 
         // Execute: structure ops → FK ops → validate ops
         try {
-          // Structure ops in a transaction
-          if (plan.structureOps.length > 0) {
+          // Structure ops + functions in a transaction
+          if (plan.structureOps.length > 0 || parsedFunctions.length > 0) {
             logger.step("MIGRATE", `Executing ${plan.structureOps.length} structure operations`);
             // Note: CREATE INDEX CONCURRENTLY and ALTER TYPE ADD VALUE cannot run inside a transaction
             const indexOps = plan.structureOps.filter((o) => o.type === "add_index" || o.type === "add_unique_index");
@@ -532,12 +498,31 @@ export async function runMigrate(config: SchemaFlowConfig): Promise<ExecutionRes
                 o.type !== "drop_index",
             );
 
-            if (nonIndexOps.length > 0) {
+            // Split nonIndexOps: functions must be created AFTER enums but BEFORE triggers.
+            // Triggers reference functions, and functions may reference enum types.
+            const isPostFunctionOp = (o: { type: string; sql?: string }) =>
+              o.type === "create_trigger" ||
+              o.type === "drop_trigger" ||
+              o.type === "enable_rls" ||
+              o.type === "create_policy" ||
+              o.type === "drop_policy" ||
+              o.type === "grant_table" ||
+              o.type === "grant_column" ||
+              o.type === "revoke_table" ||
+              o.type === "revoke_column" ||
+              (o.type === "set_comment" &&
+                o.sql != null &&
+                (o.sql.includes("COMMENT ON POLICY") || o.sql.includes("COMMENT ON TRIGGER")));
+            const preFunctionOps = nonIndexOps.filter((o) => !isPostFunctionOp(o));
+            const postFunctionOps = nonIndexOps.filter((o) => isPostFunctionOp(o));
+
+            if (nonIndexOps.length > 0 || parsedFunctions.length > 0) {
               await retryOnTimeout(
                 async () => {
                   await client.query("BEGIN");
                   try {
-                    for (const op of nonIndexOps) {
+                    // Phase 1: enums, extensions, roles, tables, columns
+                    for (const op of preFunctionOps) {
                       const marker = op.destructive ? "[DESTRUCTIVE] " : "";
                       logger.debug(`Executing: ${marker}${op.description}`);
                       try {
@@ -547,6 +532,48 @@ export async function runMigrate(config: SchemaFlowConfig): Promise<ExecutionRes
                         throw new Error(`${op.description}\n  SQL: ${op.sql}\n  Error: ${pgMsg}`, { cause: opErr });
                       }
                     }
+
+                    // Phase 2: functions (after enums exist, before triggers)
+                    for (const fn of parsedFunctions) {
+                      const replaceClause = fn.replace ? "OR REPLACE " : "";
+                      const argsClause = fn.args ? `(${fn.args})` : "()";
+                      const securityClause = fn.security === "definer" ? " SECURITY DEFINER" : "";
+                      const sql = `CREATE ${replaceClause}FUNCTION ${fn.name}${argsClause} RETURNS ${fn.returns} LANGUAGE ${fn.language}${securityClause} AS $fn_body$\n${fn.body}\n$fn_body$;`;
+                      logger.debug(`Creating function: ${fn.name}`);
+                      try {
+                        await client.query(sql);
+                      } catch (fnErr) {
+                        const pgMsg = fnErr instanceof Error ? fnErr.message : String(fnErr);
+                        throw new Error(`Create function ${fn.name}\n  SQL: ${sql}\n  Error: ${pgMsg}`, {
+                          cause: fnErr,
+                        });
+                      }
+                    }
+                    // Apply function comments
+                    for (const fn of parsedFunctions) {
+                      if (fn.comment) {
+                        const argsClause = fn.args ? `(${fn.args})` : "()";
+                        const currentComment = await getFunctionComment(client, fn.name, config.pgSchema);
+                        if (fn.comment !== currentComment) {
+                          const escapedComment = fn.comment.replace(/'/g, "''");
+                          await client.query(`COMMENT ON FUNCTION ${fn.name}${argsClause} IS '${escapedComment}';`);
+                          logger.debug(`Set comment on function: ${fn.name}`);
+                        }
+                      }
+                    }
+
+                    // Phase 3: triggers, policies, grants (after functions exist)
+                    for (const op of postFunctionOps) {
+                      const marker = op.destructive ? "[DESTRUCTIVE] " : "";
+                      logger.debug(`Executing: ${marker}${op.description}`);
+                      try {
+                        await client.query(op.sql);
+                      } catch (opErr) {
+                        const pgMsg = opErr instanceof Error ? opErr.message : String(opErr);
+                        throw new Error(`${op.description}\n  SQL: ${op.sql}\n  Error: ${pgMsg}`, { cause: opErr });
+                      }
+                    }
+
                     await client.query("COMMIT");
                   } catch (err) {
                     await client.query("ROLLBACK").catch(() => {});
@@ -556,6 +583,10 @@ export async function runMigrate(config: SchemaFlowConfig): Promise<ExecutionRes
                 { label: "structure ops", maxRetries: config.maxRetries },
               );
               opsExecuted += nonIndexOps.length;
+              if (parsedFunctions.length > 0) {
+                logger.info(`Applied ${parsedFunctions.length} function(s)`);
+                opsExecuted += parsedFunctions.length;
+              }
             }
 
             // Drop index ops outside transaction (CONCURRENTLY) — must run before creates
@@ -835,7 +866,28 @@ export async function runValidate(config: SchemaFlowConfig): Promise<ValidationR
     try {
       await client.query("BEGIN");
 
-      // Functions first
+      // Structure ops — split around functions for correct ordering
+      // Phase 1: enum/extension/role/table ops (before functions)
+      const isPostFnOp = (o: { type: string; sql: string }) =>
+        o.type === "create_trigger" ||
+        o.type === "drop_trigger" ||
+        o.type === "enable_rls" ||
+        o.type === "create_policy" ||
+        o.type === "drop_policy" ||
+        o.type === "grant_table" ||
+        o.type === "grant_column" ||
+        o.type === "revoke_table" ||
+        o.type === "revoke_column" ||
+        (o.type === "set_comment" && (o.sql.includes("COMMENT ON POLICY") || o.sql.includes("COMMENT ON TRIGGER")));
+      for (const op of plan.structureOps.filter((o) => !isPostFnOp(o))) {
+        let sql = op.sql.replace(/\bCONCURRENTLY\s+/gi, "");
+        sql = sql.replace(/\s+NOT VALID/gi, "");
+        logger.debug(`Validating: ${op.description}`);
+        await client.query(sql);
+        opsChecked++;
+      }
+
+      // Phase 2: functions (after enums, before triggers)
       for (const fn of parsedFunctions) {
         const replaceClause = fn.replace ? "OR REPLACE " : "";
         const argsClause = fn.args ? `(${fn.args})` : "()";
@@ -846,8 +898,8 @@ export async function runValidate(config: SchemaFlowConfig): Promise<ValidationR
         opsChecked++;
       }
 
-      // Structure ops — strip CONCURRENTLY and NOT VALID from SQL (can't run inside a transaction)
-      for (const op of plan.structureOps) {
+      // Phase 3: triggers, policies, grants (after functions)
+      for (const op of plan.structureOps.filter((o) => isPostFnOp(o))) {
         let sql = op.sql.replace(/\bCONCURRENTLY\s+/gi, "");
         sql = sql.replace(/\s+NOT VALID/gi, "");
         logger.debug(`Validating: ${op.description}`);

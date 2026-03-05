@@ -1,0 +1,34 @@
+# Mixin: auditable
+# Adds created/updated timestamps and audit columns (created_by, updated_by).
+# The trigger auto-sets updated_at and updated_by on every row change.
+# Usage: add `use: [auditable]` to any table.
+
+mixin: auditable
+
+columns:
+  - name: created_at
+    type: timestamptz
+    default: now()
+
+  - name: created_by
+    type: integer
+    nullable: true
+    default: "current_setting('app.user_id', true)::int"
+    comment: "User who created this row"
+
+  - name: updated_at
+    type: timestamptz
+    default: now()
+
+  - name: updated_by
+    type: integer
+    nullable: true
+    default: "current_setting('app.user_id', true)::int"
+    comment: "User who last modified this row"
+
+triggers:
+  - name: set_{table}_updated_at
+    timing: BEFORE
+    events: [UPDATE]
+    function: update_timestamp
+    for_each: ROW

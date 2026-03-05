@@ -1,0 +1,168 @@
+# Schema for table: orders
+#
+# Core of the example. Demonstrates:
+#   - Tenant isolation (RESTRICTIVE policy via mixin)
+#   - Multi-role PERMISSIVE policies
+#   - Generated column for masked payment details
+#   - Column-level grants (auditors see payment_masked, not payment_method)
+#   - Check constraints, enum type, partial indexes
+#
+# The payment_method column stores the raw value (e.g. "4242424242424242").
+# The payment_masked column is a generated stored column that produces
+# "****4242" — always in sync, zero application logic required.
+#
+# Column-level grants control who sees what:
+#   - app_user, app_manager, app_service → full column access (RLS restricts rows)
+#   - app_auditor → all columns EXCEPT payment_method; sees payment_masked instead
+#
+# This replaces the common pattern of creating a separate masked view.
+# Benefits over a view:
+#   - Single object to manage, no view + grant indirection
+#   - RLS applies naturally (views can bypass depending on security definer)
+#   - Indexes on the base table serve all roles
+#   - Column-level grants are declarative and diffable
+
+table: orders
+
+use: [tenant_isolation, auditable]
+
+columns:
+  - name: id
+    type: serial
+    primary_key: true
+
+  - name: user_id
+    type: integer
+    references:
+      table: users
+      column: id
+      on_delete: CASCADE
+
+  - name: amount
+    type: integer
+    comment: "Total in cents"
+
+  - name: currency
+    type: varchar(3)
+    default: "'USD'"
+
+  - name: status
+    type: order_status
+    default: "'draft'"
+
+  - name: payment_method
+    type: text
+    nullable: true
+    comment: "Raw payment identifier — restricted via column-level grants"
+
+  - name: payment_masked
+    type: text
+    generated: "CASE WHEN payment_method IS NOT NULL THEN '****' || right(payment_method, 4) ELSE NULL END"
+    comment: "Masked payment details — safe for auditors and logs"
+
+  - name: notes
+    type: text
+    nullable: true
+
+indexes:
+  - columns: [user_id]
+
+  - columns: [status, created_at]
+    where: "status NOT IN ('completed', 'cancelled', 'refunded')"
+    comment: "Active orders by status"
+
+  - columns: [tenant_id, status]
+    comment: "Tenant dashboard queries"
+
+checks:
+  - name: chk_positive_amount
+    expression: "amount > 0"
+
+  - name: chk_currency_code
+    expression: "currency ~ '^[A-Z]{3}$'"
+
+policies:
+  # Users: read own orders, create new ones, update only drafts
+  - name: users_select_own
+    for: SELECT
+    to: [app_user]
+    using: "user_id = current_setting('app.user_id')::int"
+
+  - name: users_insert_own
+    for: INSERT
+    to: [app_user]
+    check: "user_id = current_setting('app.user_id')::int"
+
+  - name: users_update_own_drafts
+    for: UPDATE
+    to: [app_user]
+    using: "user_id = current_setting('app.user_id')::int AND status = 'draft'"
+    check: "user_id = current_setting('app.user_id')::int"
+
+  # Managers: full read/write within the tenant
+  - name: managers_select
+    for: SELECT
+    to: [app_manager]
+    using: "true"
+
+  - name: managers_update
+    for: UPDATE
+    to: [app_manager]
+    using: "true"
+    check: "true"
+
+  - name: managers_insert
+    for: INSERT
+    to: [app_manager]
+    check: "true"
+
+  # Auditors: read-only (column-level grants restrict which columns)
+  - name: auditors_select
+    for: SELECT
+    to: [app_auditor]
+    using: "true"
+
+  # Service: unrestricted within tenant
+  - name: service_all
+    for: ALL
+    to: [app_service]
+    using: "true"
+    check: "true"
+
+  # Platform admin: cross-tenant access (not subject to tenant_isolation)
+  - name: admin_full_access
+    for: ALL
+    to: [app_admin]
+    using: "true"
+    check: "true"
+
+grants:
+  # Full table-level access for most roles
+  - to: app_user
+    privileges: [SELECT, INSERT, UPDATE]
+
+  - to: app_manager
+    privileges: [SELECT, INSERT, UPDATE]
+
+  - to: app_service
+    privileges: [SELECT, INSERT, UPDATE, DELETE]
+
+  - to: app_admin
+    privileges: [SELECT, INSERT, UPDATE, DELETE]
+
+  # Auditors: column-level grants — every column EXCEPT payment_method
+  - to: app_auditor
+    privileges: [SELECT]
+    columns:
+      - id
+      - tenant_id
+      - user_id
+      - amount
+      - currency
+      - status
+      - payment_masked
+      - notes
+      - created_at
+      - created_by
+      - updated_at
+      - updated_by

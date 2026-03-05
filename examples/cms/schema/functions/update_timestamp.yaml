@@ -1,0 +1,13 @@
+# Function: update_timestamp
+# Trigger function that sets updated_at and updated_by on row change.
+# Referenced by the timestamps mixin.
+
+name: update_timestamp
+language: plpgsql
+returns: trigger
+body: |
+  BEGIN
+    NEW.updated_at = now();
+    NEW.updated_by = current_setting('app.user_id', true)::int;
+    RETURN NEW;
+  END;

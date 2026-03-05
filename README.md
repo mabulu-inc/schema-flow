@@ -1519,6 +1519,24 @@ console.log(results);
 await closePool();
 ```
 
+## Examples
+
+The [`examples/`](examples/) directory contains three complete projects with schemas and integration tests:
+
+| Example | Complexity | What it demonstrates |
+| --- | --- | --- |
+| [**todo-app**](examples/todo-app/) | Beginner | Tables, enums, FKs, indexes, check constraints, mixins, triggers |
+| [**cms**](examples/cms/) | Intermediate | Roles, RLS, views, materialized views, seed data, soft delete, extensions |
+| [**multi-tenant-orders**](examples/multi-tenant-orders/) | Advanced | Tenant isolation, modular roles, security functions, generated columns, column-level grants |
+
+Each example includes an `example.test.ts` that migrates a fresh database and verifies behavior end-to-end:
+
+```bash
+npx vitest run examples/
+```
+
+See the [examples README](examples/README.md) for details.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).

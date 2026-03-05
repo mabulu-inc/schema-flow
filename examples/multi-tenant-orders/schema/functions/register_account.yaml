@@ -1,0 +1,26 @@
+# Function: register_account
+#
+# Creates a new user account. Called by the API layer (as app_service)
+# on behalf of an unauthenticated user during signup.
+#
+# Returns the new user's ID. The caller then creates a membership
+# via create_membership() to link the user to a tenant.
+#
+# SECURITY DEFINER: runs as the function owner so it can INSERT into
+# the users table without requiring an active session.
+
+name: register_account
+language: plpgsql
+returns: integer
+security: definer
+args: "p_email text, p_display_name text"
+body: |
+  DECLARE
+    v_user_id integer;
+  BEGIN
+    INSERT INTO users (email, display_name)
+    VALUES (p_email, p_display_name)
+    RETURNING id INTO v_user_id;
+
+    RETURN v_user_id;
+  END;

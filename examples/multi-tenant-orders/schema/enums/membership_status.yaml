@@ -1,0 +1,2 @@
+enum: membership_status
+values: [active, suspended, invited]

@@ -1,0 +1,72 @@
+# Schema for table: article_revisions
+# Immutable audit trail of every edit to an article.
+# No UPDATE/DELETE policies — revisions are append-only.
+
+table: article_revisions
+
+rls: true
+
+columns:
+  - name: id
+    type: serial
+    primary_key: true
+
+  - name: article_id
+    type: integer
+    references:
+      table: articles
+      column: id
+      on_delete: CASCADE
+
+  - name: editor_id
+    type: integer
+    references:
+      table: users
+      column: id
+      on_delete: CASCADE
+
+  - name: title
+    type: varchar(255)
+
+  - name: body
+    type: text
+    nullable: true
+
+  - name: revision_note
+    type: varchar(255)
+    nullable: true
+
+  - name: created_at
+    type: timestamptz
+    default: now()
+
+indexes:
+  - columns: [article_id, created_at]
+    comment: "Revision timeline for a given article"
+
+  - columns: [editor_id]
+
+policies:
+  - name: authors_see_own_revisions
+    for: SELECT
+    to: [cms_author]
+    using: "editor_id = get_current_user_id()"
+
+  - name: authors_create_revisions
+    for: INSERT
+    to: [cms_author]
+    check: "editor_id = get_current_user_id()"
+
+  - name: editors_see_all_revisions
+    for: SELECT
+    to: [cms_editor, cms_admin]
+    using: "true"
+
+  - name: editors_create_revisions
+    for: INSERT
+    to: [cms_editor, cms_admin]
+    check: "true"
+
+grants:
+  - to: [cms_author, cms_editor, cms_admin]
+    privileges: [SELECT, INSERT]

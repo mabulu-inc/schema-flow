@@ -1,0 +1,9 @@
+# Platform admin — can query across all tenants.
+#
+# The tenant_isolation mixin's RESTRICTIVE policy lists the tenant-bound
+# roles explicitly. Because app_admin is NOT in that list, the tenant
+# fence does not apply. Each table then adds a permissive policy
+# granting app_admin full access with `using: "true"`.
+
+role: app_admin
+login: false

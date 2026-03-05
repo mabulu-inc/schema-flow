@@ -1,0 +1,4 @@
+# Regular user — can view and create their own orders.
+
+role: app_user
+login: false

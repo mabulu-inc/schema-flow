@@ -1,0 +1,5 @@
+# Role: cms_editor
+# Can read and edit all articles, manage categories and tags.
+
+role: cms_editor
+login: false

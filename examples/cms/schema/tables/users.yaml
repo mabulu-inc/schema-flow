@@ -1,0 +1,79 @@
+# Schema for table: users
+# CMS user accounts. Every author, editor, and admin has a row here.
+# RLS scopes reads by role — authors see only themselves,
+# editors and admins see everyone.
+
+table: users
+
+use: [auditable]
+
+rls: true
+
+columns:
+  - name: id
+    type: serial
+    primary_key: true
+
+  - name: email
+    type: varchar(255)
+    unique: true
+
+  - name: display_name
+    type: varchar(100)
+
+  - name: bio
+    type: text
+    nullable: true
+
+  - name: avatar_url
+    type: text
+    nullable: true
+
+  - name: role
+    type: varchar(20)
+    default: "'author'"
+    comment: "One of: author, editor, admin"
+
+  - name: is_active
+    type: boolean
+    default: "true"
+
+indexes:
+  - columns: [email]
+    unique: true
+
+  - columns: [display_name]
+    method: gin
+    opclass: gin_trgm_ops
+    comment: "Trigram index for fuzzy name search"
+
+checks:
+  - name: chk_email_format
+    expression: "email ~* '^[^@]+@[^@]+\\.[^@]+$'"
+
+policies:
+  - name: authors_see_self
+    for: SELECT
+    to: [cms_author]
+    using: "id = get_current_user_id()"
+
+  - name: editors_see_all
+    for: SELECT
+    to: [cms_editor, cms_admin]
+    using: "true"
+
+  - name: admins_manage_all
+    for: ALL
+    to: [cms_admin]
+    using: "true"
+    check: "true"
+
+grants:
+  - to: cms_author
+    privileges: [SELECT]
+
+  - to: [cms_editor]
+    privileges: [SELECT]
+
+  - to: cms_admin
+    privileges: [SELECT, INSERT, UPDATE, DELETE]

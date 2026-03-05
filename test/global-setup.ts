@@ -1,10 +1,9 @@
 // test/global-setup.ts
 // Ensures the test Postgres container is running before any tests execute.
+// Uses the same infrastructure as the public @mabulu-inc/schema-flow/testing module.
 
-import { execSync } from "node:child_process";
-import path from "node:path";
+import { ensureTestDb } from "../src/testing/index.js";
 
 export default function globalSetup() {
-  const script = path.resolve(__dirname, "..", "scripts", "test-db-ensure.sh");
-  execSync(`bash "${script}"`, { stdio: "inherit" });
+  ensureTestDb();
 }

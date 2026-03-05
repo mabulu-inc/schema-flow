@@ -1,0 +1,100 @@
+# Schema for table: media
+# Uploaded files (images, videos, documents, audio).
+# access_token is a unique opaque ID for public URLs.
+
+table: media
+
+use: [auditable, soft_delete]
+
+rls: true
+
+columns:
+  - name: id
+    type: serial
+    primary_key: true
+
+  - name: uploader_id
+    type: integer
+    references:
+      table: users
+      column: id
+      on_delete: CASCADE
+
+  - name: file_name
+    type: varchar(255)
+
+  - name: file_path
+    type: text
+
+  - name: mime_type
+    type: varchar(100)
+
+  - name: file_size
+    type: integer
+    comment: "Size in bytes"
+
+  - name: media_type
+    type: media_type
+
+  - name: alt_text
+    type: varchar(255)
+    nullable: true
+
+  - name: access_token
+    type: uuid
+    default: gen_random_uuid()
+    unique: true
+
+indexes:
+  - columns: [uploader_id]
+
+  - columns: [media_type]
+    where: "deleted_at IS NULL"
+
+  - columns: [access_token]
+    unique: true
+
+checks:
+  - name: chk_file_size_positive
+    expression: "file_size > 0"
+
+  - name: chk_file_size_limit
+    expression: "file_size <= 104857600"
+    comment: "Max 100 MB per file"
+
+policies:
+  - name: authors_see_own_media
+    for: SELECT
+    to: [cms_author]
+    using: "uploader_id = get_current_user_id() AND deleted_at IS NULL"
+
+  - name: authors_upload_media
+    for: INSERT
+    to: [cms_author]
+    check: "uploader_id = get_current_user_id()"
+
+  - name: authors_delete_own_media
+    for: DELETE
+    to: [cms_author]
+    using: "uploader_id = get_current_user_id()"
+
+  - name: editors_see_all_media
+    for: SELECT
+    to: [cms_editor, cms_admin]
+    using: "deleted_at IS NULL"
+
+  - name: admins_manage_all_media
+    for: ALL
+    to: [cms_admin]
+    using: "true"
+    check: "true"
+
+grants:
+  - to: cms_author
+    privileges: [SELECT, INSERT, DELETE]
+
+  - to: cms_editor
+    privileges: [SELECT]
+
+  - to: cms_admin
+    privileges: [SELECT, INSERT, UPDATE, DELETE]

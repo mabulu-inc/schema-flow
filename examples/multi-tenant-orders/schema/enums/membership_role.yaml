@@ -1,0 +1,12 @@
+# Assignable roles for tenant membership.
+#
+# - user, manager, auditor: data access roles (determine PG role for SET ROLE)
+# - admin: security capability (manage members and roles within the tenant)
+#
+# A user can hold any combination: [user, admin] can manage members
+# but only sees own data. [manager, admin] gets full data + security access.
+#
+# System roles (app_service, app_admin) are provisioned outside this flow.
+
+enum: membership_role
+values: [user, manager, auditor, admin]

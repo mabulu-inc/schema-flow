@@ -1,0 +1,5 @@
+# Role: cms_admin
+# Full access to all CMS resources including user management.
+
+role: cms_admin
+login: false

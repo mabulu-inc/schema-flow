@@ -1,0 +1,56 @@
+# Function: revoke_role
+#
+# Removes a role from a membership. Raises an exception if the user
+# would be left with zero roles — suspend the membership instead.
+#
+# Authorization:
+#   - System roles (no active session): always allowed
+#   - Tenant-bound roles: requires 'admin' in app.roles
+#
+# SECURITY DEFINER: writes to tenant-scoped tables.
+
+name: revoke_role
+language: plpgsql
+returns: void
+security: definer
+args: "p_user_id integer, p_tenant_id uuid, p_role text"
+body: |
+  DECLARE
+    v_membership_id integer;
+    v_remaining integer;
+    v_caller_roles text;
+  BEGIN
+    -- Authorization: tenant admins or system roles only
+    v_caller_roles := current_setting('app.roles', true);
+    IF v_caller_roles IS NOT NULL AND v_caller_roles != '' THEN
+      IF NOT ('admin' = ANY(string_to_array(v_caller_roles, ','))) THEN
+        RAISE EXCEPTION 'Requires tenant admin role';
+      END IF;
+      IF current_setting('app.tenant_id', true) != p_tenant_id::text THEN
+        RAISE EXCEPTION 'Cannot manage roles in another tenant';
+      END IF;
+    END IF;
+
+    SELECT m.id INTO v_membership_id
+    FROM memberships m
+    WHERE m.user_id = p_user_id
+      AND m.tenant_id = p_tenant_id
+      AND m.status = 'active';
+
+    IF v_membership_id IS NULL THEN
+      RAISE EXCEPTION 'No active membership for user % in tenant %', p_user_id, p_tenant_id;
+    END IF;
+
+    -- Check how many roles would remain
+    SELECT count(*) - 1 INTO v_remaining
+    FROM membership_roles mr
+    WHERE mr.membership_id = v_membership_id;
+
+    IF v_remaining < 1 THEN
+      RAISE EXCEPTION 'Cannot revoke last role — suspend the membership instead';
+    END IF;
+
+    DELETE FROM membership_roles mr
+    WHERE mr.membership_id = v_membership_id
+      AND mr.role = p_role::membership_role;
+  END;

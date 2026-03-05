@@ -1,0 +1,50 @@
+# Schema for table: article_tags
+# Join table linking articles to tags (many-to-many).
+# Demonstrates composite primary keys.
+
+table: article_tags
+
+rls: true
+
+columns:
+  - name: article_id
+    type: integer
+    references:
+      table: articles
+      column: id
+      on_delete: CASCADE
+
+  - name: tag_id
+    type: integer
+    references:
+      table: tags
+      column: id
+      on_delete: CASCADE
+
+primary_key: [article_id, tag_id]
+
+indexes:
+  - columns: [tag_id]
+    comment: "Look up articles by tag"
+
+policies:
+  - name: anyone_reads_article_tags
+    for: SELECT
+    to: [cms_author, cms_editor, cms_admin]
+    using: "true"
+
+  - name: authors_manage_own_tags
+    for: ALL
+    to: [cms_author]
+    using: "EXISTS (SELECT 1 FROM articles WHERE id = article_id AND author_id = get_current_user_id())"
+    check: "EXISTS (SELECT 1 FROM articles WHERE id = article_id AND author_id = get_current_user_id())"
+
+  - name: editors_manage_all_tags
+    for: ALL
+    to: [cms_editor, cms_admin]
+    using: "true"
+    check: "true"
+
+grants:
+  - to: [cms_author, cms_editor, cms_admin]
+    privileges: [SELECT, INSERT, DELETE]

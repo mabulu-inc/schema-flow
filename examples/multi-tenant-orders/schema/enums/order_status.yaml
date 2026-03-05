@@ -1,0 +1,2 @@
+enum: order_status
+values: [draft, pending, paid, shipped, completed, cancelled, refunded]

@@ -1,0 +1,78 @@
+# Schema for table: membership_roles
+#
+# Junction table: each row grants one role to one membership.
+# A user can hold multiple roles within a single tenant (modular roles).
+#
+# Examples:
+#   - Sam has [user, manager] in Acme Corp
+#   - Sam has [user, auditor] in Globex Inc
+#   - Jordan has [user] in Acme Corp
+
+table: membership_roles
+
+use: [tenant_isolation, auditable]
+
+columns:
+  - name: id
+    type: serial
+    primary_key: true
+
+  - name: membership_id
+    type: integer
+    references:
+      table: memberships
+      column: id
+      on_delete: CASCADE
+
+  - name: role
+    type: membership_role
+
+  - name: granted_by
+    type: integer
+    nullable: true
+    references:
+      table: users
+      column: id
+    comment: "User who granted this role — null for system-assigned"
+
+indexes:
+  - columns: [membership_id, role]
+    unique: true
+    comment: "No duplicate roles per membership"
+
+policies:
+  - name: members_select
+    for: SELECT
+    to: [app_user, app_manager, app_auditor]
+    using: "true"
+
+  - name: managers_modify
+    for: ALL
+    to: [app_manager]
+    using: "true"
+    check: "true"
+
+  - name: service_all
+    for: ALL
+    to: [app_service]
+    using: "true"
+    check: "true"
+
+  - name: admin_full_access
+    for: ALL
+    to: [app_admin]
+    using: "true"
+    check: "true"
+
+grants:
+  - to: [app_user, app_auditor]
+    privileges: [SELECT]
+
+  - to: app_manager
+    privileges: [SELECT, INSERT, UPDATE, DELETE]
+
+  - to: app_service
+    privileges: [SELECT, INSERT, UPDATE, DELETE]
+
+  - to: app_admin
+    privileges: [SELECT, INSERT, UPDATE, DELETE]

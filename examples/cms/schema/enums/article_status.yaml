@@ -1,0 +1,5 @@
+# Enum: article_status
+# Tracks where an article sits in the editorial workflow.
+
+enum: article_status
+values: [draft, review, published, archived]

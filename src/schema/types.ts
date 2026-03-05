@@ -211,6 +211,8 @@ export interface ViewSchema {
   name: string;
   /** SQL query defining the view */
   query: string;
+  /** View grants */
+  grants?: GrantDef[];
   /** View description/comment */
   comment?: string;
 }
@@ -222,6 +224,8 @@ export interface MaterializedViewSchema {
   query: string;
   /** Indexes on the materialized view */
   indexes?: IndexDef[];
+  /** Materialized view grants */
+  grants?: GrantDef[];
   /** Materialized view description/comment */
   comment?: string;
 }
