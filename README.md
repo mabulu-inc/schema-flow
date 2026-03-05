@@ -14,7 +14,7 @@ npx @mabulu-inc/schema-flow run      # apply pre → migrate → post
 - **Declarative tables** — Define the desired end state in YAML. Schema-flow figures out the diff.
 - **Safe by default** — Only additive operations run unless you explicitly opt in to destructive changes with `--allow-destructive`.
 - **Zero new dependencies for your team** — Run via `npx` (or `pnpx`). No install step, no Java, no Go binary, no Docker requirement.
-- **Convention over configuration** — Drop files in `schema-flow/schema/`, `schema-flow/pre/`, `schema-flow/post/`. That's it.
+- **Convention over configuration** — Drop files in `schema/tables/`, `schema/pre/`, `schema/post/`. That's it.
 - **Surgical change detection** — filepath + SHA-256 hash tracking means only new or changed files are processed.
 - **Safe FK ordering** — Tables are created first (without foreign keys), then all FKs are added after every table exists.
 - **CI/CD ready** — Non-zero exit codes on failure, structured logging, `--quiet` mode for pipelines.
@@ -33,8 +33,12 @@ npx @mabulu-inc/schema-flow init
 This creates:
 
 ```
-schema-flow/
-  schema/     ← Declarative YAML table definitions (one file per table) and function files (fn_*.yaml)
+schema/
+  tables/     ← Declarative YAML table definitions (one file per table)
+  enums/      ← Enum type definitions
+  functions/  ← Function definitions
+  views/      ← View and materialized view definitions
+  roles/      ← Role definitions
   pre/        ← Pre-migration SQL scripts (run before schema changes)
   post/       ← Post-migration SQL scripts (run after schema changes)
   mixins/     ← Reusable schema mixins (timestamps, soft_delete, etc.)
@@ -43,7 +47,7 @@ schema-flow/
 
 ### 2. Define your tables
 
-**schema-flow/schema/users.yaml**
+**schema/tables/users.yaml**
 
 ```yaml
 table: users
@@ -69,7 +73,7 @@ columns:
     default: now()
 ```
 
-**schema-flow/schema/posts.yaml**
+**schema/tables/posts.yaml**
 
 ```yaml
 table: posts
@@ -120,7 +124,7 @@ npx @mabulu-inc/schema-flow run
 
 | Command | Description |
 | --- | --- |
-| `schema-flow init` | Create `schema-flow/` directory with `schema/`, `pre/`, `post/` subdirectories |
+| `schema-flow init` | Create `schema/` directory with `tables/`, `enums/`, `functions/`, `views/`, `pre/`, `post/` subdirectories |
 | `schema-flow plan` | Show what would be done (dry run) |
 | `schema-flow validate` | Validate schema against a live database (executes in a transaction, always rolls back) |
 | `schema-flow run` | Run all phases: pre → migrate → post |
@@ -320,7 +324,7 @@ policies:
 **Create an enum** — add an `enum_*.yaml` file. Append new values to the list at any time; values can never be removed (PostgreSQL limitation).
 
 ```yaml
-# schema-flow/schema/enum_status.yaml
+# schema/enums/status.yaml
 enum: status
 values: [active, inactive, suspended]
 ```
@@ -328,7 +332,7 @@ values: [active, inactive, suspended]
 **Add an extension** — append to the extensions list.
 
 ```yaml
-# schema-flow/schema/extensions.yaml
+# schema/extensions.yaml
 extensions:
   - pgcrypto
   - pg_trgm
@@ -337,7 +341,7 @@ extensions:
 **Create a view**
 
 ```yaml
-# schema-flow/schema/view_active_users.yaml
+# schema/views/active_users.yaml
 view: active_users
 query: "SELECT id, email FROM users WHERE is_active = true"
 ```
@@ -345,7 +349,7 @@ query: "SELECT id, email FROM users WHERE is_active = true"
 **Create a materialized view**
 
 ```yaml
-# schema-flow/schema/mv_daily_stats.yaml
+# schema/views/mv_daily_stats.yaml
 materialized_view: daily_stats
 query: "SELECT date_trunc('day', created_at) AS day, count(*) FROM events GROUP BY 1"
 indexes:
@@ -489,7 +493,7 @@ ON CONFLICT (name) DO NOTHING;
 COMMIT;
 ```
 
-**Grants** — for one-time grants. For grants that should be reapplied whenever they change, use [`schema-flow/repeatable/`](#repeatable-migrations) instead.
+**Grants** — for one-time grants. For grants that should be reapplied whenever they change, use [`schema/repeatable/`](#repeatable-migrations) instead.
 
 ```sql
 GRANT SELECT ON ALL TABLES IN SCHEMA public TO readonly_role;
@@ -719,7 +723,7 @@ PostgreSQL combines policies as follows: all **PERMISSIVE** policies for a comma
 A RESTRICTIVE policy that every table inherits. No permissive policy can bypass it.
 
 ```yaml
-# schema-flow/mixins/tenant_isolation.yaml
+# schema/mixins/tenant_isolation.yaml
 mixin: tenant_isolation
 rls: true
 force_rls: true
@@ -741,7 +745,7 @@ policies:
 #### Step 2: Define per-role policies on the table
 
 ```yaml
-# schema-flow/schema/orders.yaml
+# schema/tables/orders.yaml
 table: orders
 use: [tenant_isolation]
 
@@ -827,7 +831,7 @@ A role with no matching PERMISSIVE policy for a command is denied — `app_audit
 RLS controls which **rows** a role can see. To control which **columns** a role can see, use column-level `GRANT` in a repeatable script:
 
 ```sql
--- schema-flow/repeatable/grants.sql
+-- schema/repeatable/grants.sql
 
 -- Users: full column access (RLS restricts rows)
 GRANT SELECT, INSERT, UPDATE ON orders TO app_user;
@@ -847,7 +851,7 @@ Column-level `GRANT` composes with RLS — `app_auditor` can only read the liste
 For more complex masking (e.g., showing a redacted value instead of hiding the column entirely), use a view:
 
 ```yaml
-# schema-flow/schema/view_orders_audit.yaml
+# schema/views/orders_audit.yaml
 view: orders_audit
 query: |
   SELECT id, tenant_id, user_id, amount, status,
@@ -859,13 +863,13 @@ comment: "Audit view with masked payment details"
 
 Then grant auditors access to the view instead of (or in addition to) the base table.
 
-Placing grants in `schema-flow/repeatable/` ensures they are reapplied whenever the file changes, keeping permissions in sync with schema changes.
+Placing grants in `schema/repeatable/` ensures they are reapplied whenever the file changes, keeping permissions in sync with schema changes.
 
 ### Mixins
 
-Mixins let you DRY up repeated schema patterns (timestamps, soft delete, tenant scoping, etc.). Define a mixin once in `schema-flow/mixins/`, then apply it to any table with `use:`.
+Mixins let you DRY up repeated schema patterns (timestamps, soft delete, tenant scoping, etc.). Define a mixin once in `schema/mixins/`, then apply it to any table with `use:`.
 
-**schema-flow/mixins/timestamps.yaml**
+**schema/mixins/timestamps.yaml**
 
 ```yaml
 mixin: timestamps
@@ -924,7 +928,7 @@ Functions use separate files with the `fn_` prefix (e.g., `fn_update_timestamp.y
 | `comment` | string | — | Function description (`COMMENT ON FUNCTION`) |
 
 ```yaml
-# schema-flow/schema/fn_update_timestamp.yaml
+# schema/functions/update_timestamp.yaml
 name: update_timestamp
 language: plpgsql
 returns: trigger
@@ -938,7 +942,7 @@ body: |
 **Function with SECURITY DEFINER** (useful for RLS helper functions):
 
 ```yaml
-# schema-flow/schema/fn_get_current_user_id.yaml
+# schema/functions/get_current_user_id.yaml
 name: get_current_user_id
 language: sql
 returns: integer
@@ -1141,10 +1145,10 @@ For operations that can't be expressed declaratively — column renames, data mi
 
 ```bash
 npx @mabulu-inc/schema-flow new pre rename_user_email
-# → schema-flow/pre/20260228153000_rename_user_email.sql
+# → schema/pre/20260228153000_rename_user_email.sql
 
 npx @mabulu-inc/schema-flow new post seed_roles
-# → schema-flow/post/20260228153005_seed_roles.sql
+# → schema/post/20260228153005_seed_roles.sql
 ```
 
 Scripts are executed in alphabetical order. The UTC timestamp prefix ensures correct ordering.
@@ -1152,7 +1156,7 @@ Scripts are executed in alphabetical order. The UTC timestamp prefix ensures cor
 ### Example pre-migration script
 
 ```sql
--- schema-flow/pre/20260228153000_rename_user_email.sql
+-- schema/pre/20260228153000_rename_user_email.sql
 BEGIN;
 ALTER TABLE "public"."users" RENAME COLUMN "name" TO "display_name";
 COMMIT;
@@ -1161,7 +1165,7 @@ COMMIT;
 ### Example post-migration script
 
 ```sql
--- schema-flow/post/20260228160000_seed_roles.sql
+-- schema/post/20260228160000_seed_roles.sql
 BEGIN;
 INSERT INTO "public"."roles" (name) VALUES ('admin'), ('editor'), ('viewer')
 ON CONFLICT (name) DO NOTHING;
@@ -1176,7 +1180,7 @@ Bootstrap your schema files from a live database:
 npx @mabulu-inc/schema-flow generate --db "postgresql://user:pass@localhost:5432/mydb"
 ```
 
-This introspects every table and function in the `public` schema and writes a YAML file for each one into `schema-flow/schema/`.
+This introspects every table, function, enum, view, and extension in the `public` schema and writes YAML files into `schema/tables/`, `schema/functions/`, `schema/enums/`, `schema/views/`, etc.
 
 ## Change Tracking
 
@@ -1218,19 +1222,22 @@ Schema-flow exits with code `1` on any failure, making it safe for pipelines. Us
 
 ## Directory Structure
 
-schema-flow looks for a `schema-flow/` directory in the current working directory (or the directory specified with `--dir`):
+schema-flow looks for a `schema/` directory in the current working directory (or the directory specified with `--dir`):
 
 ```
 my-project/
-  schema-flow/
-    schema/         ← One YAML file per table, function, enum, extension, or view
+  schema/
+    tables/         ← One YAML file per table
       users.yaml
       posts.yaml
-      fn_update_timestamp.yaml
-      enum_status.yaml
-      extensions.yaml
-      view_active_users.yaml
+    enums/          ← One YAML file per enum type
+      status.yaml
+    functions/      ← One YAML file per function
+      update_timestamp.yaml
+    views/          ← Views and materialized views
+      active_users.yaml
       mv_daily_stats.yaml
+    roles/          ← Role definitions
     mixins/         ← Reusable schema mixins
       timestamps.yaml
       soft_delete.yaml
@@ -1240,11 +1247,12 @@ my-project/
       20260228160000_seed_roles.sql
     repeatable/     ← SQL scripts re-run whenever content changes
       grants.sql
+    extensions.yaml ← PostgreSQL extensions to enable
   src/
   package.json
 ```
 
-Run all commands from your project root — schema-flow automatically finds the `schema-flow/` folder.
+Run all commands from your project root — schema-flow automatically finds the `schema/` folder.
 
 ## Environment Variables
 
@@ -1262,7 +1270,7 @@ Run all commands from your project root — schema-flow automatically finds the 
 Define PostgreSQL enum types in `enum_*.yaml` files:
 
 ```yaml
-# schema-flow/schema/enum_status.yaml
+# schema/enums/status.yaml
 enum: status
 values:
   - active
@@ -1290,7 +1298,7 @@ columns:
 Declare required PostgreSQL extensions in an `extensions.yaml` file:
 
 ```yaml
-# schema-flow/schema/extensions.yaml
+# schema/extensions.yaml
 extensions:
   - pgcrypto
   - pg_trgm
@@ -1304,7 +1312,7 @@ Extensions are created with `CREATE EXTENSION IF NOT EXISTS` and run before all 
 **Views** use `view_*.yaml` files:
 
 ```yaml
-# schema-flow/schema/view_active_users.yaml
+# schema/views/active_users.yaml
 view: active_users
 query: "SELECT id, email FROM users WHERE is_active = true"
 ```
@@ -1314,7 +1322,7 @@ Views are created with `CREATE OR REPLACE VIEW`, so updates are safe and non-des
 **Materialized views** use `mv_*.yaml` files:
 
 ```yaml
-# schema-flow/schema/mv_daily_stats.yaml
+# schema/views/mv_daily_stats.yaml
 materialized_view: daily_stats
 query: "SELECT date_trunc('day', created_at) AS day, count(*) AS total FROM events GROUP BY 1"
 indexes:
@@ -1483,10 +1491,10 @@ This records all current schema files in the `_schema_flow_history` table with t
 
 ## Repeatable Migrations
 
-Place SQL files in `schema-flow/repeatable/` for scripts that should re-run whenever their content changes:
+Place SQL files in `schema/repeatable/` for scripts that should re-run whenever their content changes:
 
 ```
-schema-flow/repeatable/
+schema/repeatable/
   grants.sql
   refresh_views.sql
 ```

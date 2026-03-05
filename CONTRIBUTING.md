@@ -70,7 +70,7 @@ src/
   executor/     Runs phases (pre → migrate → post) with transactions
   scaffold/     Generates scripts, bootstraps from existing DB
 examples/
-  schema-flow/    Example schema-flow directory
+  schema/         Example schema directory
     schema/       Example table YAML files
     pre/          Example pre-migration scripts
     post/         Example post-migration scripts
@@ -131,7 +131,7 @@ pnpm run ci
 - One table per file, filename matches table name
 - Columns are NOT NULL by default (set `nullable: true` to opt in)
 - Foreign keys live in the table file that owns the column, not the referenced table
-- All schema files go in `schema-flow/schema/`
+- All schema files go in `schema/schema/`
 
 ### SQL Scripts
 

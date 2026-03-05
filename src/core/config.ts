@@ -7,10 +7,18 @@ import { existsSync } from "node:fs";
 export interface SchemaFlowConfig {
   /** PostgreSQL connection string */
   connectionString: string;
-  /** Base directory containing schema/, pre/, post/ folders */
+  /** Base directory containing tables/, enums/, functions/, views/, pre/, post/ folders */
   baseDir: string;
-  /** Schema files directory */
-  schemaDir: string;
+  /** Table YAML files directory */
+  tablesDir: string;
+  /** Enum YAML files directory */
+  enumsDir: string;
+  /** Function YAML files directory */
+  functionsDir: string;
+  /** View and materialized view YAML files directory */
+  viewsDir: string;
+  /** Role YAML files directory */
+  rolesDir: string;
   /** Pre-migration scripts directory */
   preDir: string;
   /** Post-migration scripts directory */
@@ -41,10 +49,14 @@ export interface SchemaFlowConfig {
   maxRetries: number;
 }
 
-const CONVENTION_DIR = "schema-flow";
+const CONVENTION_DIR = "schema";
 
 const DEFAULTS = {
-  schemaDir: "schema",
+  tablesDir: "tables",
+  enumsDir: "enums",
+  functionsDir: "functions",
+  viewsDir: "views",
+  rolesDir: "roles",
   preDir: "pre",
   postDir: "post",
   pgSchema: "public",
@@ -62,9 +74,13 @@ export function resolveConfig(overrides: Partial<SchemaFlowConfig> = {}): Schema
   }
 
   const cwd = overrides.baseDir || process.cwd();
-  // Always use the schema-flow/ subdirectory under the project root
+  // Always use the schema/ subdirectory under the project root
   const baseDir = path.join(cwd, CONVENTION_DIR);
-  const schemaDir = path.resolve(baseDir, overrides.schemaDir || DEFAULTS.schemaDir);
+  const tablesDir = path.resolve(baseDir, overrides.tablesDir || DEFAULTS.tablesDir);
+  const enumsDir = path.resolve(baseDir, overrides.enumsDir || DEFAULTS.enumsDir);
+  const functionsDir = path.resolve(baseDir, overrides.functionsDir || DEFAULTS.functionsDir);
+  const viewsDir = path.resolve(baseDir, overrides.viewsDir || DEFAULTS.viewsDir);
+  const rolesDir = path.resolve(baseDir, overrides.rolesDir || DEFAULTS.rolesDir);
   const preDir = path.resolve(baseDir, overrides.preDir || DEFAULTS.preDir);
   const postDir = path.resolve(baseDir, overrides.postDir || DEFAULTS.postDir);
   const mixinsDir = path.resolve(baseDir, "mixins");
@@ -76,7 +92,11 @@ export function resolveConfig(overrides: Partial<SchemaFlowConfig> = {}): Schema
   return {
     connectionString,
     baseDir,
-    schemaDir,
+    tablesDir,
+    enumsDir,
+    functionsDir,
+    viewsDir,
+    rolesDir,
     preDir,
     postDir,
     mixinsDir,
@@ -95,8 +115,8 @@ export function resolveConfig(overrides: Partial<SchemaFlowConfig> = {}): Schema
 /** Validate that the conventional directories exist (warn if missing) */
 export function validateDirectories(config: SchemaFlowConfig): string[] {
   const warnings: string[] = [];
-  if (!existsSync(config.schemaDir)) {
-    warnings.push(`Schema directory not found: ${config.schemaDir}`);
+  if (!existsSync(config.tablesDir)) {
+    warnings.push(`Tables directory not found: ${config.tablesDir}`);
   }
   if (!existsSync(config.preDir)) {
     warnings.push(`Pre-migration directory not found: ${config.preDir}`);

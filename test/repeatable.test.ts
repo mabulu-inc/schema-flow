@@ -10,7 +10,7 @@ describe("repeatable migrations", () => {
   const ctx = useTestProject({ closeAppPool: closePool });
 
   function writeRepeatable(baseDir: string, filename: string, content: string): string {
-    const repeatableDir = path.join(baseDir, "schema-flow", "repeatable");
+    const repeatableDir = path.join(baseDir, "schema", "repeatable");
     mkdirSync(repeatableDir, { recursive: true });
     const filePath = path.join(repeatableDir, filename);
     writeFileSync(filePath, content, "utf-8");
@@ -20,7 +20,7 @@ describe("repeatable migrations", () => {
   it("executes new repeatable SQL files", async () => {
     // Create a table first so the grant has something to target
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "items.yaml",
       `
 table: items

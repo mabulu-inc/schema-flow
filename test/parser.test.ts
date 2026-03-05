@@ -19,7 +19,7 @@ describe("parseTableFile", () => {
   });
 
   it("parses a basic table schema", () => {
-    const filePath = path.join(project.schemaDir, "users.yaml");
+    const filePath = path.join(project.tablesDir, "users.yaml");
     writeFileSync(
       filePath,
       `table: users
@@ -47,7 +47,7 @@ columns:
   });
 
   it("derives table name from filename when not specified", () => {
-    const filePath = path.join(project.schemaDir, "products.yaml");
+    const filePath = path.join(project.tablesDir, "products.yaml");
     writeFileSync(
       filePath,
       `columns:
@@ -63,7 +63,7 @@ columns:
   });
 
   it("parses foreign key references", () => {
-    const filePath = path.join(project.schemaDir, "posts.yaml");
+    const filePath = path.join(project.tablesDir, "posts.yaml");
     writeFileSync(
       filePath,
       `table: posts
@@ -90,7 +90,7 @@ columns:
   });
 
   it("parses composite primary keys", () => {
-    const filePath = path.join(project.schemaDir, "post_tags.yaml");
+    const filePath = path.join(project.tablesDir, "post_tags.yaml");
     writeFileSync(
       filePath,
       `table: post_tags
@@ -109,7 +109,7 @@ primary_key: [post_id, tag_id]
   });
 
   it("parses indexes and check constraints", () => {
-    const filePath = path.join(project.schemaDir, "orders.yaml");
+    const filePath = path.join(project.tablesDir, "orders.yaml");
     writeFileSync(
       filePath,
       `table: orders
@@ -137,7 +137,7 @@ checks:
   });
 
   it("parses triggers", () => {
-    const filePath = path.join(project.schemaDir, "orders.yaml");
+    const filePath = path.join(project.tablesDir, "orders.yaml");
     writeFileSync(
       filePath,
       `table: orders
@@ -170,7 +170,7 @@ triggers:
   });
 
   it("parses use array", () => {
-    const filePath = path.join(project.schemaDir, "items.yaml");
+    const filePath = path.join(project.tablesDir, "items.yaml");
     writeFileSync(
       filePath,
       `table: items
@@ -188,14 +188,14 @@ columns:
   });
 
   it("throws on missing columns", () => {
-    const filePath = path.join(project.schemaDir, "bad.yaml");
+    const filePath = path.join(project.tablesDir, "bad.yaml");
     writeFileSync(filePath, "table: bad\n", "utf-8");
 
     expect(() => parseTableFile(filePath)).toThrow('must define "columns"');
   });
 
   it("throws on column without name or type", () => {
-    const filePath = path.join(project.schemaDir, "bad2.yaml");
+    const filePath = path.join(project.tablesDir, "bad2.yaml");
     writeFileSync(
       filePath,
       `table: bad2
@@ -221,7 +221,7 @@ describe("parseFunctionFile", () => {
   });
 
   it("parses a function schema", () => {
-    const filePath = path.join(project.schemaDir, "fn_now_utc.yaml");
+    const filePath = path.join(project.functionsDir, "now_utc.yaml");
     writeFileSync(
       filePath,
       `name: now_utc
@@ -240,7 +240,7 @@ body: SELECT now() AT TIME ZONE 'UTC'
   });
 
   it("accepts function: as alias for name:", () => {
-    const filePath = path.join(project.schemaDir, "fn_test.yaml");
+    const filePath = path.join(project.functionsDir, "test.yaml");
     writeFileSync(
       filePath,
       `function: my_func
@@ -260,7 +260,7 @@ body: |
   });
 
   it("throws on missing required fields", () => {
-    const filePath = path.join(project.schemaDir, "fn_bad.yaml");
+    const filePath = path.join(project.functionsDir, "bad.yaml");
     writeFileSync(filePath, "name: bad_fn\n", "utf-8");
 
     expect(() => parseFunctionFile(filePath)).toThrow('must define "name"');
@@ -417,7 +417,7 @@ describe("parseTableFile with RLS", () => {
   });
 
   it("parses rls, force_rls, and policies", () => {
-    const filePath = path.join(project.schemaDir, "orders.yaml");
+    const filePath = path.join(project.tablesDir, "orders.yaml");
     writeFileSync(
       filePath,
       `table: orders
@@ -465,7 +465,7 @@ describe("parseFunctionFile with security", () => {
   });
 
   it("parses security: definer", () => {
-    const filePath = path.join(project.schemaDir, "fn_get_user.yaml");
+    const filePath = path.join(project.functionsDir, "get_user.yaml");
     writeFileSync(
       filePath,
       `name: get_current_user_id
@@ -483,7 +483,7 @@ body: |
   });
 
   it("defaults to no security field when not specified", () => {
-    const filePath = path.join(project.schemaDir, "fn_basic.yaml");
+    const filePath = path.join(project.functionsDir, "basic.yaml");
     writeFileSync(
       filePath,
       `name: basic_fn

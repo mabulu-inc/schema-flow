@@ -94,7 +94,7 @@ describe("roles: declarative role creation", () => {
 
   it("creates a role via runMigrate", async () => {
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.rolesDir,
       "role_app_reader.yaml",
       `role: app_reader
 login: false
@@ -103,7 +103,7 @@ login: false
 
     // Need at least one table file for the migration to process schema files
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "users.yaml",
       `table: users
 columns:
@@ -130,7 +130,7 @@ columns:
 
   it("creates a role with all attributes", async () => {
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.rolesDir,
       "role_admin.yaml",
       `role: admin_role
 login: true
@@ -142,7 +142,7 @@ connection_limit: 10
     );
 
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "users.yaml",
       `table: users
 columns:
@@ -172,7 +172,7 @@ columns:
 
   it("creates a role with membership (in)", async () => {
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.rolesDir,
       "role_base.yaml",
       `role: base_role
 login: false
@@ -180,7 +180,7 @@ login: false
     );
 
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.rolesDir,
       "role_child.yaml",
       `role: child_role
 login: false
@@ -190,7 +190,7 @@ in:
     );
 
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "users.yaml",
       `table: users
 columns:
@@ -217,7 +217,7 @@ columns:
 
   it("is idempotent — running twice with same role produces no errors", async () => {
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.rolesDir,
       "role_app_reader.yaml",
       `role: app_reader
 login: false
@@ -225,7 +225,7 @@ login: false
     );
 
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "users.yaml",
       `table: users
 columns:
@@ -253,7 +253,7 @@ columns:
 
   it("alters a role when attributes change", async () => {
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.rolesDir,
       "role_app.yaml",
       `role: app_role
 login: false
@@ -262,7 +262,7 @@ createdb: false
     );
 
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "users.yaml",
       `table: users
 columns:
@@ -289,7 +289,7 @@ columns:
 
     // Change attributes
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.rolesDir,
       "role_app.yaml",
       `role: app_role
 login: true
@@ -311,7 +311,7 @@ describe("grants: table-level grants", () => {
 
   it("grants table-level privileges to a role", async () => {
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.rolesDir,
       "role_reader.yaml",
       `role: reader_role
 login: false
@@ -319,7 +319,7 @@ login: false
     );
 
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "orders.yaml",
       `table: orders
 columns:
@@ -349,7 +349,7 @@ grants:
 
   it("grants multiple privileges", async () => {
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.rolesDir,
       "role_writer.yaml",
       `role: writer_role
 login: false
@@ -357,7 +357,7 @@ login: false
     );
 
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "orders.yaml",
       `table: orders
 columns:
@@ -390,7 +390,7 @@ grants:
 
   it("is idempotent — granting twice produces no errors", async () => {
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.rolesDir,
       "role_reader.yaml",
       `role: reader_role
 login: false
@@ -398,7 +398,7 @@ login: false
     );
 
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "orders.yaml",
       `table: orders
 columns:
@@ -429,7 +429,7 @@ grants:
 
   it("revokes removed privileges with --allow-destructive", async () => {
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.rolesDir,
       "role_writer.yaml",
       `role: writer_role
 login: false
@@ -437,7 +437,7 @@ login: false
     );
 
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "orders.yaml",
       `table: orders
 columns:
@@ -462,7 +462,7 @@ grants:
 
     // Remove INSERT and UPDATE
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "orders.yaml",
       `table: orders
 columns:
@@ -490,7 +490,7 @@ describe("grants: column-level grants", () => {
 
   it("grants column-level SELECT to a role", async () => {
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.rolesDir,
       "role_auditor.yaml",
       `role: auditor_role
 login: false
@@ -498,7 +498,7 @@ login: false
     );
 
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "orders.yaml",
       `table: orders
 columns:
@@ -538,7 +538,7 @@ grants:
 
   it("combines table-level and column-level grants on same table", async () => {
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.rolesDir,
       "role_user.yaml",
       `role: app_user
 login: false
@@ -546,7 +546,7 @@ login: false
     );
 
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.rolesDir,
       "role_auditor.yaml",
       `role: auditor_role
 login: false
@@ -554,7 +554,7 @@ login: false
     );
 
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "orders.yaml",
       `table: orders
 columns:
@@ -608,9 +608,9 @@ describe("drift: roles and grants", () => {
 
   it("detects missing role in database", async () => {
     // Use a unique name that no other test creates (PG roles are cluster-wide)
-    writeSchema(ctx.project.schemaDir, "role_drift_missing.yaml", `role: drift_missing_role\nlogin: false\n`);
+    writeSchema(ctx.project.rolesDir, "role_drift_missing.yaml", `role: drift_missing_role\nlogin: false\n`);
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "users.yaml",
       `table: users\ncolumns:\n  - name: id\n    type: serial\n    primary_key: true\n`,
     );
@@ -625,9 +625,9 @@ describe("drift: roles and grants", () => {
   it("detects role attribute mismatch", async () => {
     await execSql(ctx.connectionString, `DROP ROLE IF EXISTS drift_role`);
     await execSql(ctx.connectionString, `CREATE ROLE drift_role NOLOGIN`);
-    writeSchema(ctx.project.schemaDir, "role_drift.yaml", `role: drift_role\nlogin: true\n`);
+    writeSchema(ctx.project.rolesDir, "role_drift.yaml", `role: drift_role\nlogin: true\n`);
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "users.yaml",
       `table: users\ncolumns:\n  - name: id\n    type: serial\n    primary_key: true\n`,
     );
@@ -643,9 +643,9 @@ describe("drift: roles and grants", () => {
     await execSql(ctx.connectionString, `DROP ROLE IF EXISTS grant_role`);
     await execSql(ctx.connectionString, `CREATE ROLE grant_role NOLOGIN`);
     await execSql(ctx.connectionString, `CREATE TABLE items (id serial PRIMARY KEY)`);
-    writeSchema(ctx.project.schemaDir, "role_grant.yaml", `role: grant_role\nlogin: false\n`);
+    writeSchema(ctx.project.rolesDir, "role_grant.yaml", `role: grant_role\nlogin: false\n`);
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "items.yaml",
       `table: items
 columns:
@@ -665,9 +665,9 @@ grants:
   });
 
   it("no drift after applying roles and grants", async () => {
-    writeSchema(ctx.project.schemaDir, "role_ok.yaml", `role: ok_role\nlogin: false\n`);
+    writeSchema(ctx.project.rolesDir, "role_ok.yaml", `role: ok_role\nlogin: false\n`);
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "items.yaml",
       `table: items
 columns:
@@ -701,7 +701,7 @@ describe("grants: via mixins", () => {
 
   it("inherits grants from a mixin", async () => {
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.rolesDir,
       "role_service.yaml",
       `role: app_service
 login: false
@@ -719,7 +719,7 @@ grants:
     );
 
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "orders.yaml",
       `table: orders
 use:

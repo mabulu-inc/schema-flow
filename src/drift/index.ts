@@ -91,27 +91,24 @@ export interface DriftReport {
 export async function detectDrift(config: SchemaFlowConfig): Promise<DriftReport> {
   const items: DriftItem[] = [];
 
-  const schemaFiles = await discoverSchemaFiles(config.schemaDir);
+  // Discover files from each category directory
+  const tableFiles = await discoverSchemaFiles(config.tablesDir);
+  const functionFiles = await discoverSchemaFiles(config.functionsDir);
+  const enumFiles = await discoverSchemaFiles(config.enumsDir);
+  const allViewFiles = await discoverSchemaFiles(config.viewsDir);
+  const roleFiles = await discoverSchemaFiles(config.rolesDir);
 
-  // Classify files
-  const functionFiles: string[] = [];
-  const tableFiles: string[] = [];
-  const enumFiles: string[] = [];
+  // Extensions file lives at baseDir/extensions.yaml
   const extensionFiles: string[] = [];
-  const viewFiles: string[] = [];
-  const mvFiles: string[] = [];
-  const roleFiles: string[] = [];
-
-  for (const f of schemaFiles) {
-    const base = path.basename(f);
-    if (base.startsWith("fn_")) functionFiles.push(f);
-    else if (base.startsWith("enum_")) enumFiles.push(f);
-    else if (base === "extensions.yaml" || base === "extensions.yml") extensionFiles.push(f);
-    else if (base.startsWith("view_")) viewFiles.push(f);
-    else if (base.startsWith("mv_")) mvFiles.push(f);
-    else if (base.startsWith("role_")) roleFiles.push(f);
-    else tableFiles.push(f);
+  const { existsSync } = await import("node:fs");
+  for (const ext of ["extensions.yaml", "extensions.yml"]) {
+    const p = path.join(config.baseDir, ext);
+    if (existsSync(p)) extensionFiles.push(p);
   }
+
+  // Materialized views use mv_ prefix within views dir
+  const mvFiles = allViewFiles.filter((f) => path.basename(f).startsWith("mv_"));
+  const viewFiles = allViewFiles.filter((f) => !path.basename(f).startsWith("mv_"));
 
   // Parse schemas
   const parsedSchemas = tableFiles.map((f) => parseTableFile(f));

@@ -44,8 +44,8 @@ describe("integration: end-to-end execution", () => {
   describe("enums", () => {
     it("creates an enum type via runMigrate", async () => {
       writeSchema(
-        ctx.project.schemaDir,
-        "enum_status.yaml",
+        ctx.project.enumsDir,
+        "status.yaml",
         `enum: status
 values: [active, inactive, suspended]
 `,
@@ -68,8 +68,8 @@ values: [active, inactive, suspended]
     it("adds a value to an existing enum", async () => {
       // Create the initial enum
       writeSchema(
-        ctx.project.schemaDir,
-        "enum_status.yaml",
+        ctx.project.enumsDir,
+        "status.yaml",
         `enum: status
 values: [active, inactive]
 `,
@@ -86,8 +86,8 @@ values: [active, inactive]
 
       // Add a new value
       writeSchema(
-        ctx.project.schemaDir,
-        "enum_status.yaml",
+        ctx.project.enumsDir,
+        "status.yaml",
         `enum: status
 values: [active, inactive, suspended]
 `,
@@ -102,15 +102,15 @@ values: [active, inactive, suspended]
 
     it("uses enum type in a table column", async () => {
       writeSchema(
-        ctx.project.schemaDir,
-        "enum_status.yaml",
+        ctx.project.enumsDir,
+        "status.yaml",
         `enum: status
 values: [active, inactive]
 `,
       );
 
       writeSchema(
-        ctx.project.schemaDir,
+        ctx.project.tablesDir,
         "users.yaml",
         `table: users
 columns:
@@ -147,7 +147,7 @@ columns:
   describe("extensions", () => {
     it("creates an extension via runMigrate", async () => {
       writeSchema(
-        ctx.project.schemaDir,
+        ctx.project.sfDir,
         "extensions.yaml",
         `extensions:
   - pgcrypto
@@ -168,7 +168,7 @@ columns:
 
     it("is idempotent — second run produces no errors", async () => {
       writeSchema(
-        ctx.project.schemaDir,
+        ctx.project.sfDir,
         "extensions.yaml",
         `extensions:
   - pgcrypto
@@ -194,7 +194,7 @@ columns:
   describe("views", () => {
     it("creates a view via runMigrate and can query it", async () => {
       writeSchema(
-        ctx.project.schemaDir,
+        ctx.project.tablesDir,
         "users.yaml",
         `table: users
 columns:
@@ -210,8 +210,8 @@ columns:
       );
 
       writeSchema(
-        ctx.project.schemaDir,
-        "view_active_users.yaml",
+        ctx.project.viewsDir,
+        "active_users.yaml",
         `view: active_users
 query: "SELECT id, email FROM users WHERE is_active = true"
 `,
@@ -240,7 +240,7 @@ query: "SELECT id, email FROM users WHERE is_active = true"
 
     it("updates a view definition on re-run", async () => {
       writeSchema(
-        ctx.project.schemaDir,
+        ctx.project.tablesDir,
         "users.yaml",
         `table: users
 columns:
@@ -256,8 +256,8 @@ columns:
       );
 
       writeSchema(
-        ctx.project.schemaDir,
-        "view_active_users.yaml",
+        ctx.project.viewsDir,
+        "active_users.yaml",
         `view: active_users
 query: "SELECT id, email FROM users WHERE is_active = true"
 `,
@@ -274,8 +274,8 @@ query: "SELECT id, email FROM users WHERE is_active = true"
 
       // Update the view query to include all users
       writeSchema(
-        ctx.project.schemaDir,
-        "view_active_users.yaml",
+        ctx.project.viewsDir,
+        "active_users.yaml",
         `view: active_users
 query: "SELECT id, email FROM users"
 `,
@@ -299,7 +299,7 @@ query: "SELECT id, email FROM users"
   describe("materialized views", () => {
     it("creates a materialized view via runMigrate", async () => {
       writeSchema(
-        ctx.project.schemaDir,
+        ctx.project.tablesDir,
         "events.yaml",
         `table: events
 columns:
@@ -313,7 +313,7 @@ columns:
       );
 
       writeSchema(
-        ctx.project.schemaDir,
+        ctx.project.viewsDir,
         "mv_event_counts.yaml",
         `materialized_view: event_counts
 query: "SELECT count(*) AS total FROM events"
@@ -338,7 +338,7 @@ query: "SELECT count(*) AS total FROM events"
 
     it("creates a materialized view with indexes", async () => {
       writeSchema(
-        ctx.project.schemaDir,
+        ctx.project.tablesDir,
         "events.yaml",
         `table: events
 columns:
@@ -351,7 +351,7 @@ columns:
       );
 
       writeSchema(
-        ctx.project.schemaDir,
+        ctx.project.viewsDir,
         "mv_event_summary.yaml",
         `materialized_view: event_summary
 query: "SELECT category, count(*) AS total FROM events GROUP BY category"
@@ -381,7 +381,7 @@ indexes:
   describe("generated columns", () => {
     it("creates a table with generated column and verifies computed value", async () => {
       writeSchema(
-        ctx.project.schemaDir,
+        ctx.project.tablesDir,
         "users.yaml",
         `table: users
 columns:
@@ -418,7 +418,7 @@ columns:
     it("adds generated column to existing table", async () => {
       // Create the table without the generated column first
       writeSchema(
-        ctx.project.schemaDir,
+        ctx.project.tablesDir,
         "items.yaml",
         `table: items
 columns:
@@ -443,7 +443,7 @@ columns:
 
       // Now add a generated column
       writeSchema(
-        ctx.project.schemaDir,
+        ctx.project.tablesDir,
         "items.yaml",
         `table: items
 columns:
@@ -479,7 +479,7 @@ columns:
     it("applies table and column comments on existing table", async () => {
       // First create the table without comments
       writeSchema(
-        ctx.project.schemaDir,
+        ctx.project.tablesDir,
         "users.yaml",
         `table: users
 columns:
@@ -502,7 +502,7 @@ columns:
 
       // Now add comments
       writeSchema(
-        ctx.project.schemaDir,
+        ctx.project.tablesDir,
         "users.yaml",
         `table: users
 comment: "Core user accounts"
@@ -526,7 +526,7 @@ columns:
     it("updates comments on re-run", async () => {
       // Create table with initial comments
       writeSchema(
-        ctx.project.schemaDir,
+        ctx.project.tablesDir,
         "users.yaml",
         `table: users
 columns:
@@ -549,7 +549,7 @@ columns:
 
       // Add initial comments
       writeSchema(
-        ctx.project.schemaDir,
+        ctx.project.tablesDir,
         "users.yaml",
         `table: users
 comment: "User table v1"
@@ -568,7 +568,7 @@ columns:
 
       // Update comments
       writeSchema(
-        ctx.project.schemaDir,
+        ctx.project.tablesDir,
         "users.yaml",
         `table: users
 comment: "User table v2"
@@ -591,8 +591,8 @@ columns:
 
     it("applies enum comment", async () => {
       writeSchema(
-        ctx.project.schemaDir,
-        "enum_status.yaml",
+        ctx.project.enumsDir,
+        "status.yaml",
         `enum: status
 values: [active, inactive]
 comment: "Account status type"
@@ -613,7 +613,7 @@ comment: "Account status type"
 
     it("applies view comment", async () => {
       writeSchema(
-        ctx.project.schemaDir,
+        ctx.project.tablesDir,
         "users.yaml",
         `table: users
 columns:
@@ -626,8 +626,8 @@ columns:
       );
 
       writeSchema(
-        ctx.project.schemaDir,
-        "view_all_users.yaml",
+        ctx.project.viewsDir,
+        "all_users.yaml",
         `view: all_users
 query: "SELECT id, email FROM users"
 comment: "All users view"
@@ -648,8 +648,8 @@ comment: "All users view"
 
     it("applies function comment", async () => {
       writeSchema(
-        ctx.project.schemaDir,
-        "fn_noop.yaml",
+        ctx.project.functionsDir,
+        "noop.yaml",
         `name: noop
 language: plpgsql
 returns: void
@@ -672,7 +672,7 @@ comment: "A no-op function"
 
     it("applies index comment", async () => {
       writeSchema(
-        ctx.project.schemaDir,
+        ctx.project.tablesDir,
         "users.yaml",
         `table: users
 columns:
@@ -702,8 +702,8 @@ indexes:
 
     it("applies trigger comment", async () => {
       writeSchema(
-        ctx.project.schemaDir,
-        "fn_noop_trigger.yaml",
+        ctx.project.functionsDir,
+        "noop_trigger.yaml",
         `name: noop_trigger
 language: plpgsql
 returns: trigger
@@ -712,7 +712,7 @@ body: "BEGIN RETURN NEW; END;"
       );
 
       writeSchema(
-        ctx.project.schemaDir,
+        ctx.project.tablesDir,
         "users.yaml",
         `table: users
 columns:
@@ -742,7 +742,7 @@ triggers:
 
     it("applies materialized view comment", async () => {
       writeSchema(
-        ctx.project.schemaDir,
+        ctx.project.tablesDir,
         "events.yaml",
         `table: events
 columns:
@@ -756,7 +756,7 @@ columns:
       );
 
       writeSchema(
-        ctx.project.schemaDir,
+        ctx.project.viewsDir,
         "mv_event_counts.yaml",
         `materialized_view: event_counts
 query: "SELECT count(*) AS total FROM events"
@@ -778,7 +778,7 @@ comment: "Cached event totals"
 
     it("applies check constraint comment", async () => {
       writeSchema(
-        ctx.project.schemaDir,
+        ctx.project.tablesDir,
         "users.yaml",
         `table: users
 columns:
@@ -808,7 +808,7 @@ checks:
 
     it("applies policy comment", async () => {
       writeSchema(
-        ctx.project.schemaDir,
+        ctx.project.tablesDir,
         "users.yaml",
         `table: users
 rls: true
@@ -842,7 +842,7 @@ policies:
   describe("deferrable foreign keys", () => {
     it("creates a deferrable FK constraint", async () => {
       writeSchema(
-        ctx.project.schemaDir,
+        ctx.project.tablesDir,
         "nodes.yaml",
         `table: nodes
 columns:
@@ -876,7 +876,7 @@ columns:
 
     it("allows inserts within deferred transaction", async () => {
       writeSchema(
-        ctx.project.schemaDir,
+        ctx.project.tablesDir,
         "nodes.yaml",
         `table: nodes
 columns:
@@ -921,7 +921,7 @@ columns:
   describe("enhanced indexes", () => {
     it("creates a GIN index", async () => {
       writeSchema(
-        ctx.project.schemaDir,
+        ctx.project.tablesDir,
         "items.yaml",
         `table: items
 columns:
@@ -953,7 +953,7 @@ indexes:
 
     it("creates an expression index", async () => {
       writeSchema(
-        ctx.project.schemaDir,
+        ctx.project.tablesDir,
         "users.yaml",
         `table: users
 columns:
@@ -983,7 +983,7 @@ indexes:
 
     it("creates an index with INCLUDE columns", async () => {
       writeSchema(
-        ctx.project.schemaDir,
+        ctx.project.tablesDir,
         "users.yaml",
         `table: users
 columns:
@@ -1028,7 +1028,7 @@ indexes:
     it("adds an index via YAML and verifies it exists", async () => {
       // First create the table without indexes
       writeSchema(
-        ctx.project.schemaDir,
+        ctx.project.tablesDir,
         "users.yaml",
         `table: users
 columns:
@@ -1051,7 +1051,7 @@ columns:
 
       // Now add an index
       writeSchema(
-        ctx.project.schemaDir,
+        ctx.project.tablesDir,
         "users.yaml",
         `table: users
 columns:
@@ -1075,7 +1075,7 @@ indexes:
     it("removes an index when removed from YAML with --allow-destructive", async () => {
       // Create table with index
       writeSchema(
-        ctx.project.schemaDir,
+        ctx.project.tablesDir,
         "users.yaml",
         `table: users
 columns:
@@ -1104,7 +1104,7 @@ indexes:
 
       // Remove the index from YAML
       writeSchema(
-        ctx.project.schemaDir,
+        ctx.project.tablesDir,
         "users.yaml",
         `table: users
 columns:

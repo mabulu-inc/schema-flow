@@ -9,7 +9,7 @@ describe("baseline", () => {
 
   it("records all schema files without executing SQL", async () => {
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "users.yaml",
       `
 table: users

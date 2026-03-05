@@ -12,8 +12,8 @@ describe("enums", () => {
       const project = createTempProject();
       try {
         const filePath = writeSchema(
-          project.schemaDir,
-          "enum_status.yaml",
+          project.enumsDir,
+          "status.yaml",
           `
 enum: status
 values: [active, inactive, suspended]
@@ -30,7 +30,7 @@ values: [active, inactive, suspended]
     it("throws on missing enum key", () => {
       const project = createTempProject();
       try {
-        const filePath = writeSchema(project.schemaDir, "bad.yaml", `values: [a, b]`);
+        const filePath = writeSchema(project.tablesDir, "bad.yaml", `values: [a, b]`);
         expect(() => parseEnumFile(filePath)).toThrow('expected "enum" key');
       } finally {
         project.cleanup();
@@ -40,7 +40,7 @@ values: [active, inactive, suspended]
     it("throws on missing values", () => {
       const project = createTempProject();
       try {
-        const filePath = writeSchema(project.schemaDir, "bad.yaml", `enum: status`);
+        const filePath = writeSchema(project.tablesDir, "bad.yaml", `enum: status`);
         expect(() => parseEnumFile(filePath)).toThrow("non-empty array");
       } finally {
         project.cleanup();

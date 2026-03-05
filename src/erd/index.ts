@@ -5,7 +5,6 @@ import { parseTableFile } from "../schema/parser.js";
 import { loadMixins, expandMixins } from "../schema/mixins.js";
 import { discoverSchemaFiles } from "../core/files.js";
 import type { TableSchema, ColumnDef } from "../schema/types.js";
-import path from "node:path";
 
 export interface ErdOptions {
   /** Include column types in the diagram (default: true) */
@@ -66,23 +65,13 @@ export function generateMermaidErd(schemas: TableSchema[], options?: ErdOptions)
   return lines.join("\n") + "\n";
 }
 
-/** Generate Mermaid ER diagram directly from schema files on disk */
+/** Generate Mermaid ER diagram directly from table files on disk */
 export async function generateErdFromFiles(
-  schemaDir: string,
+  tablesDir: string,
   mixinsDir: string,
   options?: ErdOptions,
 ): Promise<string> {
-  const schemaFiles = await discoverSchemaFiles(schemaDir);
-
-  // Filter out non-table files
-  const NON_TABLE_PREFIXES = ["fn_", "enum_", "view_", "mv_", "role_"];
-  const tableFiles = schemaFiles.filter((f) => {
-    const base = path.basename(f);
-    return (
-      !NON_TABLE_PREFIXES.some((p) => base.startsWith(p)) && base !== "extensions.yaml" && base !== "extensions.yml"
-    );
-  });
-
+  const tableFiles = await discoverSchemaFiles(tablesDir);
   const schemas = tableFiles.map((f) => parseTableFile(f));
 
   // Expand mixins

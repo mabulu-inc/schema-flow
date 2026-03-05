@@ -34,7 +34,7 @@ describe("FileTracker", () => {
     await tracker.ensureTable(ctx.client);
     const tracked = await tracker.getTracked(ctx.client);
 
-    const filePath = `${project.schemaDir}/users.yaml`;
+    const filePath = `${project.tablesDir}/users.yaml`;
     writeFileSync(filePath, "table: users\ncolumns: []", "utf-8");
 
     const result = tracker.classifyFiles([filePath], tracked, "schema");
@@ -47,7 +47,7 @@ describe("FileTracker", () => {
     const tracker = new FileTracker("_schema_flow_history");
     await tracker.ensureTable(ctx.client);
 
-    const filePath = `${project.schemaDir}/users.yaml`;
+    const filePath = `${project.tablesDir}/users.yaml`;
     writeFileSync(filePath, "table: users\ncolumns: []", "utf-8");
 
     await tracker.recordFile(ctx.client, filePath, "schema");
@@ -63,7 +63,7 @@ describe("FileTracker", () => {
     const tracker = new FileTracker("_schema_flow_history");
     await tracker.ensureTable(ctx.client);
 
-    const filePath = `${project.schemaDir}/users.yaml`;
+    const filePath = `${project.tablesDir}/users.yaml`;
     writeFileSync(filePath, "table: users\ncolumns: []", "utf-8");
     await tracker.recordFile(ctx.client, filePath, "schema");
 
@@ -82,7 +82,7 @@ describe("FileTracker", () => {
     const tracker = new FileTracker("_schema_flow_history");
     await tracker.ensureTable(ctx.client);
 
-    const filePath = `${project.schemaDir}/users.yaml`;
+    const filePath = `${project.tablesDir}/users.yaml`;
     writeFileSync(filePath, "v1", "utf-8");
     await tracker.recordFile(ctx.client, filePath, "schema");
 

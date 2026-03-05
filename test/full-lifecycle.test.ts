@@ -98,7 +98,7 @@ describe("lifecycle — tables & columns", () => {
 
   it("column types — serial, text, varchar, integer, numeric, boolean, timestamptz, jsonb, uuid", async () => {
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "lc_col_types.yaml",
       `
 table: lc_col_types
@@ -145,7 +145,7 @@ columns:
 
     // Phase 3: Drift — change varchar(100) → varchar(255)
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "lc_col_types.yaml",
       `
 table: lc_col_types
@@ -189,7 +189,7 @@ columns:
 
   it("nullable vs NOT NULL", async () => {
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "lc_nullable.yaml",
       `
 table: lc_nullable
@@ -213,7 +213,7 @@ columns:
 
     // Drift: remove nullable from optional_col
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "lc_nullable.yaml",
       `
 table: lc_nullable
@@ -236,7 +236,7 @@ columns:
 
   it("literal and expression defaults", async () => {
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "lc_defaults.yaml",
       `
 table: lc_defaults
@@ -267,7 +267,7 @@ columns:
 
     // Drift: change default 'active' → 'pending'
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "lc_defaults.yaml",
       `
 table: lc_defaults
@@ -293,7 +293,7 @@ columns:
 
   it("generated column (a + b) STORED", async () => {
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "lc_generated.yaml",
       `
 table: lc_generated
@@ -323,7 +323,7 @@ columns:
 
     // Drift: change generated expression
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "lc_generated.yaml",
       `
 table: lc_generated
@@ -358,7 +358,7 @@ describe("lifecycle — constraints", () => {
 
   it("single PK with custom name", async () => {
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "lc_pk_named.yaml",
       `
 table: lc_pk_named
@@ -377,7 +377,7 @@ primary_key_name: pk_lc_custom
 
     // Drift: rename PK
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "lc_pk_named.yaml",
       `
 table: lc_pk_named
@@ -396,7 +396,7 @@ primary_key_name: pk_lc_renamed
 
   it("composite PK", async () => {
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "lc_composite_pk.yaml",
       `
 table: lc_composite_pk
@@ -420,7 +420,7 @@ primary_key:
 
     // Drift: remove column b from YAML entirely (extra_in_db)
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "lc_composite_pk.yaml",
       `
 table: lc_composite_pk
@@ -438,7 +438,7 @@ columns:
 
   it("single UNIQUE with custom name", async () => {
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "lc_uq_named.yaml",
       `
 table: lc_uq_named
@@ -460,7 +460,7 @@ columns:
 
     // Drift: remove unique
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "lc_uq_named.yaml",
       `
 table: lc_uq_named
@@ -481,7 +481,7 @@ columns:
 
   it("multi-column UNIQUE", async () => {
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "lc_multi_uq.yaml",
       `
 table: lc_multi_uq
@@ -506,7 +506,7 @@ unique_constraints:
 
     // Drift: change columns
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "lc_multi_uq.yaml",
       `
 table: lc_multi_uq
@@ -531,7 +531,7 @@ unique_constraints:
 
   it("CHECK constraint", async () => {
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "lc_check.yaml",
       `
 table: lc_check
@@ -554,7 +554,7 @@ checks:
 
     // Drift: change expression
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "lc_check.yaml",
       `
 table: lc_check
@@ -577,7 +577,7 @@ checks:
 
   it("FK with CASCADE/SET NULL/DEFERRABLE", async () => {
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "lc_fk_parent.yaml",
       `
 table: lc_fk_parent
@@ -588,7 +588,7 @@ columns:
 `,
     );
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "lc_fk_child.yaml",
       `
 table: lc_fk_child
@@ -618,7 +618,7 @@ columns:
 
     // Drift: change on_delete
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "lc_fk_child.yaml",
       `
 table: lc_fk_child
@@ -654,7 +654,7 @@ describe("lifecycle — indexes", () => {
 
   it("btree index", async () => {
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "lc_idx_btree.yaml",
       `
 table: lc_idx_btree
@@ -677,7 +677,7 @@ indexes:
 
     // Drift: change columns
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "lc_idx_btree.yaml",
       `
 table: lc_idx_btree
@@ -700,7 +700,7 @@ indexes:
 
   it("GIN with opclass", async () => {
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "lc_idx_gin.yaml",
       `
 table: lc_idx_gin
@@ -727,7 +727,7 @@ indexes:
 
     // Drift: remove opclass
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "lc_idx_gin.yaml",
       `
 table: lc_idx_gin
@@ -752,7 +752,7 @@ indexes:
 
   it("partial index (WHERE)", async () => {
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "lc_idx_partial.yaml",
       `
 table: lc_idx_partial
@@ -781,7 +781,7 @@ indexes:
 
     // Drift: change WHERE
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "lc_idx_partial.yaml",
       `
 table: lc_idx_partial
@@ -810,7 +810,7 @@ indexes:
 
   it("covering index (INCLUDE)", async () => {
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "lc_idx_include.yaml",
       `
 table: lc_idx_include
@@ -837,7 +837,7 @@ indexes:
 
     // Drift: change INCLUDE cols
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "lc_idx_include.yaml",
       `
 table: lc_idx_include
@@ -864,7 +864,7 @@ indexes:
 
   it("unique index", async () => {
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "lc_idx_unique.yaml",
       `
 table: lc_idx_unique
@@ -888,7 +888,7 @@ indexes:
 
     // Drift: remove unique
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "lc_idx_unique.yaml",
       `
 table: lc_idx_unique
@@ -911,7 +911,7 @@ indexes:
 
   it("expression index lower(email)", async () => {
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "lc_idx_expr.yaml",
       `
 table: lc_idx_expr
@@ -934,7 +934,7 @@ indexes:
 
     // Drift: change to upper(email)
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "lc_idx_expr.yaml",
       `
 table: lc_idx_expr
@@ -961,10 +961,10 @@ indexes:
 describe("lifecycle — triggers", () => {
   const ctx = useTestProject({ closeAppPool: closePool });
 
-  function writeNoopFn(schemaDir: string) {
+  function writeNoopFn(functionsDir: string) {
     writeSchema(
-      schemaDir,
-      "fn_noop_lc.yaml",
+      functionsDir,
+      "noop_lc.yaml",
       `
 function: noop_lc
 language: plpgsql
@@ -977,9 +977,9 @@ body: |
   }
 
   it("BEFORE INSERT FOR EACH ROW", async () => {
-    writeNoopFn(ctx.project.schemaDir);
+    writeNoopFn(ctx.project.functionsDir);
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "lc_trg_before.yaml",
       `
 table: lc_trg_before
@@ -1006,7 +1006,7 @@ triggers:
 
     // Drift: change timing BEFORE → AFTER
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "lc_trg_before.yaml",
       `
 table: lc_trg_before
@@ -1032,9 +1032,9 @@ triggers:
   });
 
   it("AFTER UPDATE with WHEN clause", async () => {
-    writeNoopFn(ctx.project.schemaDir);
+    writeNoopFn(ctx.project.functionsDir);
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "lc_trg_when.yaml",
       `
 table: lc_trg_when
@@ -1062,7 +1062,7 @@ triggers:
 
     // Drift: change WHEN clause
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "lc_trg_when.yaml",
       `
 table: lc_trg_when
@@ -1089,9 +1089,9 @@ triggers:
   });
 
   it("FOR EACH STATEMENT", async () => {
-    writeNoopFn(ctx.project.schemaDir);
+    writeNoopFn(ctx.project.functionsDir);
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "lc_trg_stmt.yaml",
       `
 table: lc_trg_stmt
@@ -1115,7 +1115,7 @@ triggers:
 
     // Drift: change to FOR EACH ROW
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "lc_trg_stmt.yaml",
       `
 table: lc_trg_stmt
@@ -1145,7 +1145,7 @@ describe("lifecycle — RLS & policies", () => {
 
   it("RLS enabled + force_rls", async () => {
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "lc_rls.yaml",
       `
 table: lc_rls
@@ -1167,7 +1167,7 @@ force_rls: true
 
     // Drift: remove force_rls
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "lc_rls.yaml",
       `
 table: lc_rls
@@ -1193,7 +1193,7 @@ rls: true
       `DO $$ BEGIN CREATE ROLE test_user_lc; EXCEPTION WHEN duplicate_object THEN NULL; END $$`,
     );
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "lc_pol_perm.yaml",
       `
 table: lc_pol_perm
@@ -1221,7 +1221,7 @@ policies:
 
     // Drift: change USING expression
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "lc_pol_perm.yaml",
       `
 table: lc_pol_perm
@@ -1249,7 +1249,7 @@ policies:
 
   it("RESTRICTIVE policy", async () => {
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "lc_pol_restr.yaml",
       `
 table: lc_pol_restr
@@ -1275,7 +1275,7 @@ policies:
 
     // Drift: change for SELECT → ALL
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "lc_pol_restr.yaml",
       `
 table: lc_pol_restr
@@ -1307,8 +1307,8 @@ describe("lifecycle — functions", () => {
 
   it("SQL function with args", async () => {
     writeSchema(
-      ctx.project.schemaDir,
-      "fn_add_lc.yaml",
+      ctx.project.functionsDir,
+      "add_lc.yaml",
       `
 function: add_lc
 language: sql
@@ -1337,8 +1337,8 @@ body: "SELECT x + y"
 
     // Phase 3: Drift — change returns
     writeSchema(
-      ctx.project.schemaDir,
-      "fn_add_lc.yaml",
+      ctx.project.functionsDir,
+      "add_lc.yaml",
       `
 function: add_lc
 language: sql
@@ -1355,8 +1355,8 @@ body: "SELECT (x + y)::bigint"
 
   it("plpgsql SECURITY DEFINER", async () => {
     writeSchema(
-      ctx.project.schemaDir,
-      "fn_secure_lc.yaml",
+      ctx.project.functionsDir,
+      "secure_lc.yaml",
       `
 function: secure_lc
 language: plpgsql
@@ -1383,8 +1383,8 @@ body: |
 
     // Drift: remove security
     writeSchema(
-      ctx.project.schemaDir,
-      "fn_secure_lc.yaml",
+      ctx.project.functionsDir,
+      "secure_lc.yaml",
       `
 function: secure_lc
 language: plpgsql
@@ -1401,8 +1401,8 @@ body: |
 
   it("function body fidelity", async () => {
     writeSchema(
-      ctx.project.schemaDir,
-      "fn_body_lc.yaml",
+      ctx.project.functionsDir,
+      "body_lc.yaml",
       `
 function: body_lc
 language: sql
@@ -1428,8 +1428,8 @@ body: "SELECT n * 2"
 
     // Drift: change body
     writeSchema(
-      ctx.project.schemaDir,
-      "fn_body_lc.yaml",
+      ctx.project.functionsDir,
+      "body_lc.yaml",
       `
 function: body_lc
 language: sql
@@ -1452,8 +1452,8 @@ describe("lifecycle — enums", () => {
 
   it("enum values", async () => {
     writeSchema(
-      ctx.project.schemaDir,
-      "enum_status_lc.yaml",
+      ctx.project.enumsDir,
+      "status_lc.yaml",
       `
 enum: status_lc
 values: [active, inactive, pending]
@@ -1468,8 +1468,8 @@ values: [active, inactive, pending]
 
     // Drift: remove a value from YAML
     writeSchema(
-      ctx.project.schemaDir,
-      "enum_status_lc.yaml",
+      ctx.project.enumsDir,
+      "status_lc.yaml",
       `
 enum: status_lc
 values: [active, pending]
@@ -1489,7 +1489,7 @@ describe("lifecycle — views", () => {
 
   it("view query", async () => {
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "lc_view_src.yaml",
       `
 table: lc_view_src
@@ -1503,8 +1503,8 @@ columns:
 `,
     );
     writeSchema(
-      ctx.project.schemaDir,
-      "view_lc_names.yaml",
+      ctx.project.viewsDir,
+      "lc_names.yaml",
       `
 view: lc_names
 query: "SELECT id, name FROM lc_view_src"
@@ -1518,8 +1518,8 @@ query: "SELECT id, name FROM lc_view_src"
 
     // Drift: change query
     writeSchema(
-      ctx.project.schemaDir,
-      "view_lc_names.yaml",
+      ctx.project.viewsDir,
+      "lc_names.yaml",
       `
 view: lc_names
 query: "SELECT id FROM lc_view_src"
@@ -1539,7 +1539,7 @@ describe("lifecycle — materialized views", () => {
 
   it("MV query", async () => {
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "lc_mv_src.yaml",
       `
 table: lc_mv_src
@@ -1553,7 +1553,7 @@ columns:
 `,
     );
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.viewsDir,
       "mv_lc_totals.yaml",
       `
 materialized_view: lc_totals
@@ -1568,7 +1568,7 @@ query: "SELECT count(*) AS cnt FROM lc_mv_src"
 
     // Drift: change query
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.viewsDir,
       "mv_lc_totals.yaml",
       `
 materialized_view: lc_totals
@@ -1583,7 +1583,7 @@ query: "SELECT sum(val) AS total FROM lc_mv_src"
 
   it("MV with indexes", async () => {
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "lc_mv_idx_src.yaml",
       `
 table: lc_mv_idx_src
@@ -1597,7 +1597,7 @@ columns:
 `,
     );
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.viewsDir,
       "mv_lc_cats.yaml",
       `
 materialized_view: lc_cats
@@ -1617,7 +1617,7 @@ indexes:
 
     // Drift: remove index from YAML
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.viewsDir,
       "mv_lc_cats.yaml",
       `
 materialized_view: lc_cats

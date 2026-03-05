@@ -107,7 +107,7 @@ describe("zdm — zero-downtime migrations", () => {
   it("add FK uses NOT VALID pattern — no lock on concurrent writes", async () => {
     // v1: parent + child tables, no FK
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "zdm_fk_parent.yaml",
       `
 table: zdm_fk_parent
@@ -120,7 +120,7 @@ columns:
 `,
     );
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "zdm_fk_child.yaml",
       `
 table: zdm_fk_child
@@ -143,7 +143,7 @@ columns:
     // v2: add FK on child.parent_id → parent.id
     await closePool();
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "zdm_fk_child.yaml",
       `
 table: zdm_fk_child
@@ -176,7 +176,7 @@ columns:
   it("add CHECK constraint uses NOT VALID pattern — no lock", async () => {
     // v1: table with age column, no check
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "zdm_check.yaml",
       `
 table: zdm_check
@@ -194,7 +194,7 @@ columns:
     // v2: add CHECK constraint
     await closePool();
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "zdm_check.yaml",
       `
 table: zdm_check
@@ -224,7 +224,7 @@ checks:
   it("set NOT NULL uses safe pattern — no lock", async () => {
     // v1: nullable name column
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "zdm_notnull.yaml",
       `
 table: zdm_notnull
@@ -243,7 +243,7 @@ columns:
     // v2: make NOT NULL
     await closePool();
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "zdm_notnull.yaml",
       `
 table: zdm_notnull
@@ -270,7 +270,7 @@ columns:
   it("create index uses CONCURRENTLY — no lock", async () => {
     // v1: table without index
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "zdm_idx.yaml",
       `
 table: zdm_idx
@@ -288,7 +288,7 @@ columns:
     // v2: add index
     await closePool();
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "zdm_idx.yaml",
       `
 table: zdm_idx
@@ -318,7 +318,7 @@ indexes:
   it("create unique index uses CONCURRENTLY — no lock", async () => {
     // v1: table without unique index
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "zdm_uidx.yaml",
       `
 table: zdm_uidx
@@ -336,7 +336,7 @@ columns:
     // v2: add unique index
     await closePool();
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "zdm_uidx.yaml",
       `
 table: zdm_uidx
@@ -367,7 +367,7 @@ indexes:
   it("drop index uses CONCURRENTLY — no lock", async () => {
     // v1: table with index
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "zdm_idx_drop.yaml",
       `
 table: zdm_idx_drop
@@ -389,7 +389,7 @@ indexes:
     // v2: remove index
     await closePool();
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "zdm_idx_drop.yaml",
       `
 table: zdm_idx_drop
@@ -417,7 +417,7 @@ columns:
   it("add nullable column — no lock on concurrent reads/writes", async () => {
     // v1: simple table
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "zdm_addcol.yaml",
       `
 table: zdm_addcol
@@ -435,7 +435,7 @@ columns:
     // v2: add nullable column
     await closePool();
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "zdm_addcol.yaml",
       `
 table: zdm_addcol
@@ -465,7 +465,7 @@ columns:
   it("add column-level unique via concurrent index — no lock", async () => {
     // v1: table with email, no unique
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "zdm_col_uq.yaml",
       `
 table: zdm_col_uq
@@ -483,7 +483,7 @@ columns:
     // v2: add unique on email
     await closePool();
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "zdm_col_uq.yaml",
       `
 table: zdm_col_uq

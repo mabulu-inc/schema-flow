@@ -12,8 +12,8 @@ describe("views", () => {
       const project = createTempProject();
       try {
         const filePath = writeSchema(
-          project.schemaDir,
-          "view_active_users.yaml",
+          project.viewsDir,
+          "active_users.yaml",
           `
 view: active_users
 query: "SELECT id, name FROM users WHERE active = true"
@@ -30,7 +30,7 @@ query: "SELECT id, name FROM users WHERE active = true"
     it("throws on missing view key", () => {
       const project = createTempProject();
       try {
-        const filePath = writeSchema(project.schemaDir, "bad.yaml", `query: "SELECT 1"`);
+        const filePath = writeSchema(project.tablesDir, "bad.yaml", `query: "SELECT 1"`);
         expect(() => parseViewFile(filePath)).toThrow('expected "view" key');
       } finally {
         project.cleanup();
@@ -41,7 +41,7 @@ query: "SELECT id, name FROM users WHERE active = true"
       const project = createTempProject();
       try {
         const filePath = writeSchema(
-          project.schemaDir,
+          project.viewsDir,
           "mv_stats.yaml",
           `
 materialized_view: daily_stats
@@ -63,7 +63,7 @@ indexes:
     it("throws on missing materialized_view key", () => {
       const project = createTempProject();
       try {
-        const filePath = writeSchema(project.schemaDir, "bad.yaml", `query: "SELECT 1"`);
+        const filePath = writeSchema(project.tablesDir, "bad.yaml", `query: "SELECT 1"`);
         expect(() => parseMaterializedViewFile(filePath)).toThrow('expected "materialized_view" key');
       } finally {
         project.cleanup();

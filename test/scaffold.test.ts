@@ -29,12 +29,16 @@ describe("scaffold", () => {
       const baseDir = path.join("/tmp", `sf_init_test_${Date.now()}`);
       try {
         scaffoldInit(baseDir);
-        expect(existsSync(path.join(baseDir, "schema-flow", "schema"))).toBe(true);
-        expect(existsSync(path.join(baseDir, "schema-flow", "pre"))).toBe(true);
-        expect(existsSync(path.join(baseDir, "schema-flow", "post"))).toBe(true);
-        expect(existsSync(path.join(baseDir, "schema-flow", "mixins"))).toBe(true);
-        expect(existsSync(path.join(baseDir, "schema-flow", "schema", ".gitkeep"))).toBe(true);
-        expect(existsSync(path.join(baseDir, "schema-flow", "mixins", ".gitkeep"))).toBe(true);
+        expect(existsSync(path.join(baseDir, "schema", "tables"))).toBe(true);
+        expect(existsSync(path.join(baseDir, "schema", "enums"))).toBe(true);
+        expect(existsSync(path.join(baseDir, "schema", "functions"))).toBe(true);
+        expect(existsSync(path.join(baseDir, "schema", "views"))).toBe(true);
+        expect(existsSync(path.join(baseDir, "schema", "roles"))).toBe(true);
+        expect(existsSync(path.join(baseDir, "schema", "pre"))).toBe(true);
+        expect(existsSync(path.join(baseDir, "schema", "post"))).toBe(true);
+        expect(existsSync(path.join(baseDir, "schema", "mixins"))).toBe(true);
+        expect(existsSync(path.join(baseDir, "schema", "tables", ".gitkeep"))).toBe(true);
+        expect(existsSync(path.join(baseDir, "schema", "mixins", ".gitkeep"))).toBe(true);
       } finally {
         rmSync(baseDir, { recursive: true, force: true });
       }
@@ -112,8 +116,8 @@ describe("generateFromDb", () => {
     const files = await generateFromDb(config);
     expect(files.length).toBeGreaterThanOrEqual(2);
 
-    const usersFile = path.join(ctx.project.schemaDir, "users.yaml");
-    const postsFile = path.join(ctx.project.schemaDir, "posts.yaml");
+    const usersFile = path.join(ctx.project.tablesDir, "users.yaml");
+    const postsFile = path.join(ctx.project.tablesDir, "posts.yaml");
 
     expect(existsSync(usersFile)).toBe(true);
     expect(existsSync(postsFile)).toBe(true);
@@ -154,7 +158,7 @@ describe("generateFromDb", () => {
     });
 
     await generateFromDb(config);
-    const triggeredFile = path.join(ctx.project.schemaDir, "triggered.yaml");
+    const triggeredFile = path.join(ctx.project.tablesDir, "triggered.yaml");
     expect(existsSync(triggeredFile)).toBe(true);
 
     const content = readFileSync(triggeredFile, "utf-8");
@@ -206,7 +210,7 @@ describe("generateFromDb", () => {
 
     await generateFromDb(config);
 
-    const fnFile = path.join(ctx.project.schemaDir, "fn_session_authorization.yaml");
+    const fnFile = path.join(ctx.project.functionsDir, "session_authorization.yaml");
     expect(existsSync(fnFile)).toBe(true);
 
     const content = readFileSync(fnFile, "utf-8");
@@ -240,7 +244,7 @@ describe("generateFromDb", () => {
 
     await generateFromDb(config);
 
-    const fnFile = path.join(ctx.project.schemaDir, "fn_get_active_sessions.yaml");
+    const fnFile = path.join(ctx.project.functionsDir, "get_active_sessions.yaml");
     expect(existsSync(fnFile)).toBe(true);
 
     const content = readFileSync(fnFile, "utf-8");

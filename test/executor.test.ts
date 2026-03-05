@@ -40,7 +40,7 @@ describe("executor", () => {
 
   it("creates tables from YAML schema files", async () => {
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "users.yaml",
       `table: users
 columns:
@@ -75,7 +75,7 @@ columns:
 
   it("creates tables with foreign keys in correct order", async () => {
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "authors.yaml",
       `table: authors
 columns:
@@ -88,7 +88,7 @@ columns:
     );
 
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "books.yaml",
       `table: books
 columns:
@@ -177,7 +177,7 @@ columns:
 
     // Schema defines a new table
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "users.yaml",
       `table: users
 columns:
@@ -215,7 +215,7 @@ columns:
 
   it("dry run does not modify the database", async () => {
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "users.yaml",
       `table: users
 columns:
@@ -242,7 +242,7 @@ columns:
 
   it("skips unchanged files on second run", async () => {
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "users.yaml",
       `table: users
 columns:
@@ -276,7 +276,7 @@ columns:
     writeScript(ctx.project.preDir, "20260101000000_bad.sql", `SELECT 1 FROM nonexistent_table;`);
 
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "users.yaml",
       `table: users
 columns:
@@ -308,7 +308,7 @@ columns:
 
     // Schema file does NOT include the 'obsolete' column
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "items.yaml",
       `table: items
 columns:
@@ -343,7 +343,7 @@ columns:
     );
 
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "items.yaml",
       `table: items
 columns:
@@ -374,8 +374,8 @@ columns:
 
   it("creates functions from fn_ files and triggers from YAML", async () => {
     writeSchema(
-      ctx.project.schemaDir,
-      "fn_update_timestamp.yaml",
+      ctx.project.functionsDir,
+      "update_timestamp.yaml",
       `name: update_timestamp
 language: plpgsql
 returns: trigger
@@ -388,7 +388,7 @@ body: |
     );
 
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "events.yaml",
       `table: events
 columns:
@@ -423,8 +423,8 @@ triggers:
 
   it("expands mixins and creates tables with mixin columns and triggers", async () => {
     writeSchema(
-      ctx.project.schemaDir,
-      "fn_update_timestamp.yaml",
+      ctx.project.functionsDir,
+      "update_timestamp.yaml",
       `name: update_timestamp
 language: plpgsql
 returns: trigger
@@ -457,7 +457,7 @@ triggers:
     );
 
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "products.yaml",
       `table: products
 use: [timestamps]
@@ -489,8 +489,8 @@ columns:
 
   it("dry-run shows trigger operations", async () => {
     writeSchema(
-      ctx.project.schemaDir,
-      "fn_update_timestamp.yaml",
+      ctx.project.functionsDir,
+      "update_timestamp.yaml",
       `name: update_timestamp
 language: plpgsql
 returns: trigger
@@ -503,7 +503,7 @@ body: |
     );
 
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "items.yaml",
       `table: items
 columns:
@@ -540,7 +540,7 @@ triggers:
 
   it("creates table with RLS and policies", async () => {
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "orders.yaml",
       `table: orders
 rls: true
@@ -573,8 +573,8 @@ policies:
 
   it("creates function with SECURITY DEFINER", async () => {
     writeSchema(
-      ctx.project.schemaDir,
-      "fn_get_user.yaml",
+      ctx.project.functionsDir,
+      "get_user.yaml",
       `name: get_current_user_id
 language: sql
 returns: integer
@@ -621,7 +621,7 @@ policies:
     );
 
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "items.yaml",
       `table: items
 use: [tenant_isolation]
@@ -652,7 +652,7 @@ columns:
 
   it("idempotent second run with RLS", async () => {
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "rls_idem.yaml",
       `table: rls_idem
 rls: true
@@ -688,8 +688,8 @@ policies:
 
   it("idempotent second run with triggers", async () => {
     writeSchema(
-      ctx.project.schemaDir,
-      "fn_update_timestamp.yaml",
+      ctx.project.functionsDir,
+      "update_timestamp.yaml",
       `name: update_timestamp
 language: plpgsql
 returns: trigger
@@ -702,7 +702,7 @@ body: |
     );
 
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "things.yaml",
       `table: things
 columns:
@@ -740,7 +740,7 @@ triggers:
 
   it("validate returns valid for a correct schema", async () => {
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "users.yaml",
       `table: users
 columns:
@@ -770,7 +770,7 @@ columns:
 
   it("validate catches bad SQL in policy using expression", async () => {
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "orders.yaml",
       `table: orders
 rls: true
@@ -803,8 +803,8 @@ policies:
     // Use a SQL-language function — Postgres validates SQL bodies at creation time
     // (unlike plpgsql which defers validation to first call)
     writeSchema(
-      ctx.project.schemaDir,
-      "fn_broken.yaml",
+      ctx.project.functionsDir,
+      "broken.yaml",
       `name: broken_function
 language: sql
 returns: integer
@@ -813,7 +813,7 @@ body: SELECT id FROM nonexistent_table
     );
 
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "items.yaml",
       `table: items
 columns:
@@ -837,7 +837,7 @@ columns:
 
   it("validate does not modify the database", async () => {
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "users.yaml",
       `table: users
 columns:
@@ -867,7 +867,7 @@ columns:
 
   it("advisory lock prevents concurrent migration", async () => {
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "users.yaml",
       `table: users
 columns:
@@ -904,7 +904,7 @@ columns:
 
   it("advisory lock released after migration (second run succeeds)", async () => {
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "users.yaml",
       `table: users
 columns:
@@ -932,7 +932,7 @@ columns:
 
   it("creates FK with NOT VALID then validates", async () => {
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "authors.yaml",
       `table: authors
 columns:
@@ -945,7 +945,7 @@ columns:
     );
 
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "books.yaml",
       `table: books
 columns:
@@ -984,7 +984,7 @@ columns:
     await execSql(ctx.connectionString, `INSERT INTO items (name) VALUES ('test')`);
 
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "items.yaml",
       `table: items
 columns:
@@ -1014,7 +1014,7 @@ columns:
 
   it("validate does not modify the database with ZDM ops", async () => {
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "authors.yaml",
       `table: authors
 columns:
@@ -1025,7 +1025,7 @@ columns:
     );
 
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "books.yaml",
       `table: books
 columns:

@@ -6,15 +6,20 @@ export const CLAUDE_MD_CONTENT = `# schema-flow — YAML Format Reference
 ## Directory Structure
 
 \`\`\`
-schema-flow/
-  schema/       One YAML file per table, plus fn_*.yaml, enum_*.yaml, view_*.yaml, extensions.yaml
+schema/
+  tables/       One YAML file per table
+  enums/        One YAML file per enum type
+  functions/    One YAML file per function
+  views/        One YAML file per view (prefix materialized views with mv_)
+  roles/        One YAML file per role
   mixins/       Reusable column/index/trigger/policy sets (applied via \`use:\`)
   pre/          SQL scripts that run BEFORE declarative migration (renames, backfills)
   post/         SQL scripts that run AFTER declarative migration (seeds, grants, refreshes)
   repeatable/   SQL scripts re-applied whenever their content changes
+  extensions.yaml  PostgreSQL extensions to enable
 \`\`\`
 
-## Table YAML (\`schema/<table>.yaml\`)
+## Table YAML (\`tables/<table>.yaml\`)
 
 \`\`\`yaml
 table: users
@@ -116,7 +121,7 @@ triggers:
     when: "OLD.* IS DISTINCT FROM NEW.*"
 \`\`\`
 
-## Function YAML (\`schema/fn_<name>.yaml\`)
+## Function YAML (\`functions/<name>.yaml\`)
 
 \`\`\`yaml
 name: update_timestamp
@@ -132,7 +137,7 @@ body: |
   END;
 \`\`\`
 
-## Enum YAML (\`schema/enum_<name>.yaml\`)
+## Enum YAML (\`enums/<name>.yaml\`)
 
 \`\`\`yaml
 enum: user_role
@@ -140,7 +145,7 @@ values: [admin, editor, viewer]
 comment: "User permission roles"
 \`\`\`
 
-## View YAML (\`schema/view_<name>.yaml\`)
+## View YAML (\`views/<name>.yaml\`)
 
 \`\`\`yaml
 view: active_users
@@ -151,7 +156,7 @@ query: |
   WHERE deleted_at IS NULL
 \`\`\`
 
-## Materialized View (\`schema/mv_<name>.yaml\`)
+## Materialized View (\`views/mv_<name>.yaml\`)
 
 \`\`\`yaml
 materialized_view: user_stats
@@ -164,7 +169,7 @@ indexes:
     unique: true
 \`\`\`
 
-## Extensions (\`schema/extensions.yaml\`)
+## Extensions (\`extensions.yaml\`)
 
 \`\`\`yaml
 extensions:

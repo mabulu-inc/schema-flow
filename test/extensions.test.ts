@@ -12,7 +12,7 @@ describe("extensions", () => {
       const project = createTempProject();
       try {
         const filePath = writeSchema(
-          project.schemaDir,
+          project.tablesDir,
           "extensions.yaml",
           `
 extensions:
@@ -30,7 +30,7 @@ extensions:
     it("throws on missing extensions key", () => {
       const project = createTempProject();
       try {
-        const filePath = writeSchema(project.schemaDir, "bad.yaml", `other: value`);
+        const filePath = writeSchema(project.tablesDir, "bad.yaml", `other: value`);
         expect(() => parseExtensionsFile(filePath)).toThrow('expected "extensions" key');
       } finally {
         project.cleanup();

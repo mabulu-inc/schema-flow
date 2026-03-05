@@ -113,7 +113,7 @@ function printHelp(): void {
     ${"\x1b[36m"}new pre <name>${"\x1b[0m"}      Scaffold a new pre-migration script
     ${"\x1b[36m"}new post <name>${"\x1b[0m"}     Scaffold a new post-migration script
     ${"\x1b[36m"}new mixin <name>${"\x1b[0m"}    Scaffold a new mixin YAML file
-    ${"\x1b[36m"}init${"\x1b[0m"}               Initialize directory structure (schema/, pre/, post/, repeatable/)
+    ${"\x1b[36m"}init${"\x1b[0m"}               Initialize directory structure (tables/, enums/, functions/, views/, etc.)
     ${"\x1b[36m"}docs${"\x1b[0m"}               Print YAML format reference
     ${"\x1b[36m"}status${"\x1b[0m"}              Show migration status and pending changes
     ${"\x1b[36m"}help${"\x1b[0m"}               Show this help message
@@ -149,11 +149,15 @@ function printHelp(): void {
 
   ${"\x1b[1m"}Convention:${"\x1b[0m"}
     schema-flow expects the following directory structure:
-      schema-flow/
-        schema/    Declarative table YAML files (one per table) and function files (fn_*.yaml)
-        pre/       Pre-migration SQL scripts (run before schema changes)
-        post/      Post-migration SQL scripts (run after schema changes)
-        mixins/    Reusable schema mixins (e.g., timestamps, soft_delete)
+      schema/
+        tables/      Declarative table YAML files (one per table)
+        enums/       Enum type definitions
+        functions/   Function definitions
+        views/       View and materialized view definitions
+        roles/       Role definitions
+        pre/         Pre-migration SQL scripts (run before schema changes)
+        post/        Post-migration SQL scripts (run after schema changes)
+        mixins/      Reusable schema mixins (e.g., timestamps, soft_delete)
 
   ${"\x1b[1m"}Environment:${"\x1b[0m"}
     SCHEMA_FLOW_DATABASE_URL           PostgreSQL connection string (takes precedence)
@@ -182,8 +186,19 @@ async function showStatus(config: SchemaFlowConfig): Promise<void> {
     await tracker.ensureTable(client);
     const tracked = await tracker.getTracked(client);
 
-    // Schema files
-    const schemaFiles = await glob([path.join(config.schemaDir, "*.yaml"), path.join(config.schemaDir, "*.yml")]);
+    // Schema files (from all category directories)
+    const schemaFiles = await glob([
+      path.join(config.tablesDir, "*.yaml"),
+      path.join(config.tablesDir, "*.yml"),
+      path.join(config.enumsDir, "*.yaml"),
+      path.join(config.enumsDir, "*.yml"),
+      path.join(config.functionsDir, "*.yaml"),
+      path.join(config.functionsDir, "*.yml"),
+      path.join(config.viewsDir, "*.yaml"),
+      path.join(config.viewsDir, "*.yml"),
+      path.join(config.rolesDir, "*.yaml"),
+      path.join(config.rolesDir, "*.yml"),
+    ]);
     const schemaStatus = tracker.classifyFiles(schemaFiles, tracked, "schema");
 
     // Pre scripts
@@ -298,7 +313,7 @@ async function main(): Promise<void> {
     });
 
     const { generateErdFromFiles } = await import("../erd/index.js");
-    const erd = await generateErdFromFiles(minimalConfig.schemaDir, minimalConfig.mixinsDir);
+    const erd = await generateErdFromFiles(minimalConfig.tablesDir, minimalConfig.mixinsDir);
 
     if (args.flags.output) {
       const { writeFileSync, mkdirSync } = await import("node:fs");
@@ -485,18 +500,8 @@ async function main(): Promise<void> {
 
       case "lint": {
         logger.banner("Migration Lint");
-        const pathMod = await import("node:path");
         const { discoverSchemaFiles: discoverFiles } = await import("../core/files.js");
-        const schemaFilesForLint = await discoverFiles(config.schemaDir);
-        const NON_TABLE_PREFIXES_LINT = ["fn_", "enum_", "view_", "mv_", "role_"];
-        const tableFilesForLint = schemaFilesForLint.filter((f) => {
-          const base = pathMod.default.basename(f);
-          return (
-            !NON_TABLE_PREFIXES_LINT.some((p) => base.startsWith(p)) &&
-            base !== "extensions.yaml" &&
-            base !== "extensions.yml"
-          );
-        });
+        const tableFilesForLint = await discoverFiles(config.tablesDir);
 
         // Parse and expand
         const { parseTableFile: ptf } = await import("../schema/parser.js");
@@ -542,19 +547,9 @@ async function main(): Promise<void> {
 
       case "sql": {
         logger.banner("SQL File Generation");
-        const pathModSql = await import("node:path");
         const { discoverSchemaFiles: discoverSql } = await import("../core/files.js");
-        const sqlSchemaFiles = await discoverSql(config.schemaDir);
-        const sqlFunctionFiles = sqlSchemaFiles.filter((f) => pathModSql.default.basename(f).startsWith("fn_"));
-        const NON_TABLE_PREFIXES_SQL = ["fn_", "enum_", "view_", "mv_", "role_"];
-        const sqlTableFiles = sqlSchemaFiles.filter((f) => {
-          const base = pathModSql.default.basename(f);
-          return (
-            !NON_TABLE_PREFIXES_SQL.some((p) => base.startsWith(p)) &&
-            base !== "extensions.yaml" &&
-            base !== "extensions.yml"
-          );
-        });
+        const sqlTableFiles = await discoverSql(config.tablesDir);
+        const sqlFunctionFiles = await discoverSql(config.functionsDir);
 
         const { parseTableFile: ptfSql, parseFunctionFile: pffSql } = await import("../schema/parser.js");
         const { loadMixins: lmSql, expandMixins: emSql } = await import("../schema/mixins.js");
@@ -584,7 +579,8 @@ async function main(): Promise<void> {
           wfs(args.flags.output, sql, "utf-8");
           logger.success(`SQL written to ${args.flags.output}`);
         } else {
-          const outputDir = args.flags.outputDir || pathModSql.default.join(config.baseDir, "migrations");
+          const pathMod = await import("node:path");
+          const outputDir = args.flags.outputDir || pathMod.default.join(config.baseDir, "migrations");
           const result = generateSqlFile(sqlPlan, sqlParsedFunctions, {
             outputDir,
             name: args.flags.outputName,

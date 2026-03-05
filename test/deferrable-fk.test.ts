@@ -12,7 +12,7 @@ describe("deferrable foreign keys", () => {
       const project = createTempProject();
       try {
         const filePath = writeSchema(
-          project.schemaDir,
+          project.tablesDir,
           "nodes.yaml",
           `
 table: nodes

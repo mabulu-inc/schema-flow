@@ -30,7 +30,7 @@ describe("drift — columns", () => {
   it("detects column type mismatch", async () => {
     await execSql(ctx.connectionString, `CREATE TABLE t (id serial PRIMARY KEY, name text)`);
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "t.yaml",
       `table: t
 columns:
@@ -50,7 +50,7 @@ columns:
   it("detects default value mismatch", async () => {
     await execSql(ctx.connectionString, `CREATE TABLE t (id serial PRIMARY KEY, status text DEFAULT 'active')`);
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "t.yaml",
       `table: t
 columns:
@@ -71,7 +71,7 @@ columns:
   it("detects YAML has default but DB does not", async () => {
     await execSql(ctx.connectionString, `CREATE TABLE t (id serial PRIMARY KEY, status text NOT NULL)`);
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "t.yaml",
       `table: t
 columns:
@@ -92,7 +92,7 @@ columns:
   it("detects unique mismatch — YAML has unique, DB does not", async () => {
     await execSql(ctx.connectionString, `CREATE TABLE t (id serial PRIMARY KEY, email text)`);
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "t.yaml",
       `table: t
 columns:
@@ -114,7 +114,7 @@ columns:
   it("detects unique mismatch — DB has unique, YAML does not", async () => {
     await execSql(ctx.connectionString, `CREATE TABLE t (id serial PRIMARY KEY, email text UNIQUE)`);
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "t.yaml",
       `table: t
 columns:
@@ -140,7 +140,7 @@ columns:
        CREATE TABLE posts (id serial PRIMARY KEY, author_id integer REFERENCES users(id))`,
     );
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "orgs.yaml",
       `table: orgs
 columns:
@@ -150,7 +150,7 @@ columns:
 `,
     );
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "users.yaml",
       `table: users
 columns:
@@ -160,7 +160,7 @@ columns:
 `,
     );
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "posts.yaml",
       `table: posts
 columns:
@@ -189,7 +189,7 @@ columns:
        CREATE TABLE children (id serial PRIMARY KEY, parent_id integer REFERENCES parents(id) ON DELETE CASCADE)`,
     );
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "parents.yaml",
       `table: parents
 columns:
@@ -199,7 +199,7 @@ columns:
 `,
     );
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "children.yaml",
       `table: children
 columns:
@@ -228,7 +228,7 @@ describe("drift — indexes", () => {
   it("detects missing index", async () => {
     await execSql(ctx.connectionString, `CREATE TABLE t (id serial PRIMARY KEY, email text)`);
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "t.yaml",
       `table: t
 columns:
@@ -255,7 +255,7 @@ indexes:
        CREATE INDEX idx_t_email ON t (email)`,
     );
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "t.yaml",
       `table: t
 columns:
@@ -279,7 +279,7 @@ columns:
        CREATE INDEX idx_t_ab ON t (a)`,
     );
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "t.yaml",
       `table: t
 columns:
@@ -310,7 +310,7 @@ indexes:
        CREATE INDEX idx_t_email ON t (email)`,
     );
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "t.yaml",
       `table: t
 columns:
@@ -339,7 +339,7 @@ indexes:
        CREATE INDEX idx_t_data ON t USING gin (data)`,
     );
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "t.yaml",
       `table: t
 columns:
@@ -368,7 +368,7 @@ indexes:
        CREATE INDEX idx_t_active ON t (id) WHERE (active = true)`,
     );
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "t.yaml",
       `table: t
 columns:
@@ -397,7 +397,7 @@ indexes:
        CREATE INDEX idx_t_email ON t (email)`,
     );
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "t.yaml",
       `table: t
 columns:
@@ -424,7 +424,7 @@ describe("drift — unique constraints", () => {
   it("detects missing unique constraint", async () => {
     await execSql(ctx.connectionString, `CREATE TABLE t (id serial PRIMARY KEY, a text, b text)`);
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "t.yaml",
       `table: t
 columns:
@@ -453,7 +453,7 @@ unique_constraints:
       `CREATE TABLE t (id serial PRIMARY KEY, a text, b text, CONSTRAINT uq_t_a_b UNIQUE (a, b))`,
     );
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "t.yaml",
       `table: t
 columns:
@@ -479,7 +479,7 @@ columns:
       `CREATE TABLE t (id serial PRIMARY KEY, a text, b text, c text, CONSTRAINT uq_t UNIQUE (a, b))`,
     );
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "t.yaml",
       `table: t
 columns:
@@ -517,7 +517,7 @@ describe("drift — triggers", () => {
        CREATE FUNCTION noop() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END; $$`,
     );
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "t.yaml",
       `table: t
 columns:
@@ -536,8 +536,8 @@ triggers:
 `,
     );
     writeSchema(
-      ctx.project.schemaDir,
-      "fn_noop.yaml",
+      ctx.project.functionsDir,
+      "noop.yaml",
       `name: noop
 returns: trigger
 language: plpgsql
@@ -559,7 +559,7 @@ replace: true
        CREATE TRIGGER trg_extra BEFORE INSERT ON t FOR EACH ROW EXECUTE FUNCTION noop()`,
     );
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "t.yaml",
       `table: t
 columns:
@@ -569,8 +569,8 @@ columns:
 `,
     );
     writeSchema(
-      ctx.project.schemaDir,
-      "fn_noop.yaml",
+      ctx.project.functionsDir,
+      "noop.yaml",
       `name: noop
 returns: trigger
 language: plpgsql
@@ -592,7 +592,7 @@ replace: true
        CREATE TRIGGER trg_t BEFORE INSERT ON t FOR EACH ROW EXECUTE FUNCTION noop()`,
     );
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "t.yaml",
       `table: t
 columns:
@@ -608,8 +608,8 @@ triggers:
 `,
     );
     writeSchema(
-      ctx.project.schemaDir,
-      "fn_noop.yaml",
+      ctx.project.functionsDir,
+      "noop.yaml",
       `name: noop
 returns: trigger
 language: plpgsql
@@ -632,7 +632,7 @@ replace: true
        CREATE TRIGGER trg_t BEFORE INSERT ON t FOR EACH ROW EXECUTE FUNCTION noop()`,
     );
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "t.yaml",
       `table: t
 columns:
@@ -648,8 +648,8 @@ triggers:
 `,
     );
     writeSchema(
-      ctx.project.schemaDir,
-      "fn_noop.yaml",
+      ctx.project.functionsDir,
+      "noop.yaml",
       `name: noop
 returns: trigger
 language: plpgsql
@@ -673,7 +673,7 @@ replace: true
        CREATE TRIGGER trg_t BEFORE INSERT ON t FOR EACH ROW EXECUTE FUNCTION noop()`,
     );
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "t.yaml",
       `table: t
 columns:
@@ -689,8 +689,8 @@ triggers:
 `,
     );
     writeSchema(
-      ctx.project.schemaDir,
-      "fn_noop.yaml",
+      ctx.project.functionsDir,
+      "noop.yaml",
       `name: noop
 returns: trigger
 language: plpgsql
@@ -700,8 +700,8 @@ replace: true
 `,
     );
     writeSchema(
-      ctx.project.schemaDir,
-      "fn_other.yaml",
+      ctx.project.functionsDir,
+      "other.yaml",
       `name: other_fn
 returns: trigger
 language: plpgsql
@@ -727,7 +727,7 @@ describe("drift — policies", () => {
        ALTER TABLE t ENABLE ROW LEVEL SECURITY`,
     );
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "t.yaml",
       `table: t
 columns:
@@ -755,7 +755,7 @@ policies:
        CREATE POLICY allow_all ON t FOR ALL TO PUBLIC USING (true)`,
     );
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "t.yaml",
       `table: t
 columns:
@@ -778,7 +778,7 @@ rls: true
        CREATE POLICY row_owner ON t FOR ALL TO PUBLIC USING (owner_id = 1)`,
     );
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "t.yaml",
       `table: t
 columns:
@@ -810,7 +810,7 @@ policies:
        CREATE POLICY pol ON t FOR SELECT TO PUBLIC USING (true)`,
     );
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "t.yaml",
       `table: t
 columns:
@@ -838,7 +838,7 @@ describe("drift — RLS", () => {
   it("detects RLS enabled in YAML but not in DB", async () => {
     await execSql(ctx.connectionString, `CREATE TABLE t (id serial PRIMARY KEY)`);
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "t.yaml",
       `table: t
 columns:
@@ -860,7 +860,7 @@ rls: true
        ALTER TABLE t ENABLE ROW LEVEL SECURITY`,
     );
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "t.yaml",
       `table: t
 columns:
@@ -882,7 +882,7 @@ columns:
        ALTER TABLE t FORCE ROW LEVEL SECURITY`,
     );
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "t.yaml",
       `table: t
 columns:
@@ -905,7 +905,7 @@ describe("drift — check constraints", () => {
   it("detects missing check constraint", async () => {
     await execSql(ctx.connectionString, `CREATE TABLE t (id serial PRIMARY KEY, price integer)`);
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "t.yaml",
       `table: t
 columns:
@@ -931,7 +931,7 @@ checks:
       `CREATE TABLE t (id serial PRIMARY KEY, price integer, CONSTRAINT chk_positive CHECK (price > 0))`,
     );
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "t.yaml",
       `table: t
 columns:
@@ -954,7 +954,7 @@ columns:
       `CREATE TABLE t (id serial PRIMARY KEY, price integer, CONSTRAINT chk_price CHECK (price > 0))`,
     );
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "t.yaml",
       `table: t
 columns:
@@ -981,8 +981,8 @@ describe("drift — enums", () => {
 
   it("detects missing enum", async () => {
     writeSchema(
-      ctx.project.schemaDir,
-      "enum_status.yaml",
+      ctx.project.enumsDir,
+      "status.yaml",
       `enum: status_type
 values: [active, inactive]
 `,
@@ -995,8 +995,8 @@ values: [active, inactive]
   it("detects extra enum value in DB", async () => {
     await execSql(ctx.connectionString, `CREATE TYPE status_type AS ENUM ('active', 'inactive', 'archived')`);
     writeSchema(
-      ctx.project.schemaDir,
-      "enum_status.yaml",
+      ctx.project.enumsDir,
+      "status.yaml",
       `enum: status_type
 values: [active, inactive]
 `,
@@ -1010,8 +1010,8 @@ values: [active, inactive]
   it("detects missing enum value in DB", async () => {
     await execSql(ctx.connectionString, `CREATE TYPE status_type AS ENUM ('active')`);
     writeSchema(
-      ctx.project.schemaDir,
-      "enum_status.yaml",
+      ctx.project.enumsDir,
+      "status.yaml",
       `enum: status_type
 values: [active, inactive]
 `,
@@ -1025,8 +1025,8 @@ values: [active, inactive]
   it("no drift when enum values match", async () => {
     await execSql(ctx.connectionString, `CREATE TYPE status_type AS ENUM ('active', 'inactive')`);
     writeSchema(
-      ctx.project.schemaDir,
-      "enum_status.yaml",
+      ctx.project.enumsDir,
+      "status.yaml",
       `enum: status_type
 values: [active, inactive]
 `,
@@ -1043,7 +1043,7 @@ describe("drift — views", () => {
   it("detects missing view", async () => {
     await execSql(ctx.connectionString, `CREATE TABLE t (id serial PRIMARY KEY, name text)`);
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "t.yaml",
       `table: t
 columns:
@@ -1056,8 +1056,8 @@ columns:
 `,
     );
     writeSchema(
-      ctx.project.schemaDir,
-      "view_t.yaml",
+      ctx.project.viewsDir,
+      "t.yaml",
       `view: v_t
 query: "SELECT id, name FROM t"
 `,
@@ -1074,7 +1074,7 @@ query: "SELECT id, name FROM t"
        CREATE VIEW v_extra AS SELECT id FROM t`,
     );
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "t.yaml",
       `table: t
 columns:
@@ -1098,7 +1098,7 @@ columns:
        CREATE VIEW v_t AS SELECT id FROM t`,
     );
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "t.yaml",
       `table: t
 columns:
@@ -1111,8 +1111,8 @@ columns:
 `,
     );
     writeSchema(
-      ctx.project.schemaDir,
-      "view_t.yaml",
+      ctx.project.viewsDir,
+      "t.yaml",
       `view: v_t
 query: "SELECT id, name FROM t"
 `,
@@ -1129,7 +1129,7 @@ describe("drift — materialized views", () => {
   it("detects missing materialized view", async () => {
     await execSql(ctx.connectionString, `CREATE TABLE t (id serial PRIMARY KEY, name text)`);
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "t.yaml",
       `table: t
 columns:
@@ -1142,7 +1142,7 @@ columns:
 `,
     );
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.viewsDir,
       "mv_t.yaml",
       `materialized_view: mv_t
 query: "SELECT id, name FROM t"
@@ -1164,7 +1164,7 @@ query: "SELECT id, name FROM t"
        CREATE MATERIALIZED VIEW mv_t AS SELECT id FROM t`,
     );
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "t.yaml",
       `table: t
 columns:
@@ -1177,7 +1177,7 @@ columns:
 `,
     );
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.viewsDir,
       "mv_t.yaml",
       `materialized_view: mv_t
 query: "SELECT id, name FROM t"
@@ -1198,8 +1198,8 @@ describe("drift — functions", () => {
       `CREATE FUNCTION add_one(x integer) RETURNS integer LANGUAGE sql AS $$ SELECT x + 1; $$`,
     );
     writeSchema(
-      ctx.project.schemaDir,
-      "fn_add_one.yaml",
+      ctx.project.functionsDir,
+      "add_one.yaml",
       `name: add_one
 returns: integer
 language: plpgsql
@@ -1221,8 +1221,8 @@ replace: true
       `CREATE FUNCTION my_fn() RETURNS void LANGUAGE plpgsql SECURITY DEFINER AS $$ BEGIN END; $$`,
     );
     writeSchema(
-      ctx.project.schemaDir,
-      "fn_my_fn.yaml",
+      ctx.project.functionsDir,
+      "my_fn.yaml",
       `name: my_fn
 returns: void
 language: plpgsql
@@ -1240,8 +1240,8 @@ replace: true
 
   it("detects missing function", async () => {
     writeSchema(
-      ctx.project.schemaDir,
-      "fn_missing.yaml",
+      ctx.project.functionsDir,
+      "missing.yaml",
       `name: missing_fn
 returns: void
 language: plpgsql
@@ -1261,7 +1261,7 @@ describe("drift — extensions", () => {
   const ctx = useTestProject({ closeAppPool: closePool });
 
   it("detects missing extension", async () => {
-    writeSchema(ctx.project.schemaDir, "extensions.yaml", `extensions:\n  - pgcrypto\n`);
+    writeSchema(ctx.project.sfDir, "extensions.yaml", `extensions:\n  - pgcrypto\n`);
     // pgcrypto is not installed by default
     const report = await drift(ctx);
     const m = find(report.items, { category: "extension", direction: "missing_from_db", name: "pgcrypto" });
@@ -1278,7 +1278,7 @@ describe("drift — generated columns", () => {
       `CREATE TABLE t (id serial PRIMARY KEY, a integer, b integer, total integer GENERATED ALWAYS AS (a + b) STORED)`,
     );
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "t.yaml",
       `table: t
 columns:
@@ -1306,7 +1306,7 @@ columns:
   it("detects YAML has generated but DB does not", async () => {
     await execSql(ctx.connectionString, `CREATE TABLE t (id serial PRIMARY KEY, a integer, b integer, total integer)`);
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "t.yaml",
       `table: t
 columns:
@@ -1337,7 +1337,7 @@ columns:
       `CREATE TABLE t (id serial PRIMARY KEY, a integer, b integer, total integer GENERATED ALWAYS AS (a + b) STORED)`,
     );
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "t.yaml",
       `table: t
 columns:
@@ -1373,7 +1373,7 @@ describe("drift — trigger WHEN clause", () => {
        CREATE TRIGGER trg_t BEFORE UPDATE ON t FOR EACH ROW WHEN (OLD.status IS DISTINCT FROM NEW.status) EXECUTE FUNCTION noop()`,
     );
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "t.yaml",
       `table: t
 columns:
@@ -1393,8 +1393,8 @@ triggers:
 `,
     );
     writeSchema(
-      ctx.project.schemaDir,
-      "fn_noop.yaml",
+      ctx.project.functionsDir,
+      "noop.yaml",
       `name: noop
 returns: trigger
 language: plpgsql
@@ -1417,7 +1417,7 @@ replace: true
        CREATE TRIGGER trg_t BEFORE UPDATE ON t FOR EACH ROW EXECUTE FUNCTION noop()`,
     );
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "t.yaml",
       `table: t
 columns:
@@ -1437,8 +1437,8 @@ triggers:
 `,
     );
     writeSchema(
-      ctx.project.schemaDir,
-      "fn_noop.yaml",
+      ctx.project.functionsDir,
+      "noop.yaml",
       `name: noop
 returns: trigger
 language: plpgsql
@@ -1469,7 +1469,7 @@ describe("drift — policy TO roles", () => {
        CREATE POLICY pol ON t FOR ALL TO test_role_a USING (true)`,
     );
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "t.yaml",
       `table: t
 columns:
@@ -1502,7 +1502,7 @@ describe("drift — policy permissive", () => {
        CREATE POLICY pol ON t AS RESTRICTIVE FOR ALL TO PUBLIC USING (true)`,
     );
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "t.yaml",
       `table: t
 columns:
@@ -1534,8 +1534,8 @@ describe("drift — function args", () => {
       `CREATE FUNCTION test_fn(x integer) RETURNS integer LANGUAGE sql AS $$ SELECT x + 1; $$`,
     );
     writeSchema(
-      ctx.project.schemaDir,
-      "fn_test_fn.yaml",
+      ctx.project.functionsDir,
+      "test_fn.yaml",
       `name: test_fn
 returns: integer
 language: sql
@@ -1562,7 +1562,7 @@ describe("drift — index INCLUDE", () => {
        CREATE INDEX idx_t_email ON t (email) INCLUDE (name)`,
     );
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "t.yaml",
       `table: t
 columns:
@@ -1597,7 +1597,7 @@ indexes:
        CREATE INDEX idx_t_email ON t (email)`,
     );
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "t.yaml",
       `table: t
 columns:
@@ -1633,7 +1633,7 @@ describe("drift — materialized view indexes", () => {
        CREATE MATERIALIZED VIEW mv_t AS SELECT id, name FROM t`,
     );
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "t.yaml",
       `table: t
 columns:
@@ -1646,7 +1646,7 @@ columns:
 `,
     );
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.viewsDir,
       "mv_t.yaml",
       `materialized_view: mv_t
 query: "SELECT id, name FROM t"
@@ -1670,7 +1670,7 @@ indexes:
        CREATE UNIQUE INDEX idx_mv_t_id ON mv_t (id)`,
     );
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "t.yaml",
       `table: t
 columns:
@@ -1683,7 +1683,7 @@ columns:
 `,
     );
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.viewsDir,
       "mv_t.yaml",
       `materialized_view: mv_t
 query: "SELECT id, name FROM t"
@@ -1705,7 +1705,7 @@ describe("drift — index opclass", () => {
        CREATE INDEX idx_t_data ON t USING gin (data jsonb_path_ops)`,
     );
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "t.yaml",
       `table: t
 columns:
@@ -1734,7 +1734,7 @@ describe("drift — PK constraint name", () => {
   it("detects PK constraint name mismatch", async () => {
     await execSql(ctx.connectionString, `CREATE TABLE t (id serial, CONSTRAINT pk_t PRIMARY KEY (id))`);
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "t.yaml",
       `table: t
 columns:

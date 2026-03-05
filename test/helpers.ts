@@ -77,24 +77,33 @@ export async function createTestDb(): Promise<{
  */
 export function createTempProject(): {
   baseDir: string;
-  schemaDir: string;
+  tablesDir: string;
+  enumsDir: string;
+  functionsDir: string;
+  viewsDir: string;
+  rolesDir: string;
   preDir: string;
   postDir: string;
   mixinsDir: string;
+  /** The schema root dir (baseDir/schema/) */
+  sfDir: string;
   cleanup: () => void;
 } {
   const suffix = randomBytes(4).toString("hex");
   const baseDir = path.join("/tmp", `sf_test_project_${suffix}`);
-  const sfDir = path.join(baseDir, "schema-flow");
-  const schemaDir = path.join(sfDir, "schema");
+  const sfDir = path.join(baseDir, "schema");
+  const tablesDir = path.join(sfDir, "tables");
+  const enumsDir = path.join(sfDir, "enums");
+  const functionsDir = path.join(sfDir, "functions");
+  const viewsDir = path.join(sfDir, "views");
+  const rolesDir = path.join(sfDir, "roles");
   const preDir = path.join(sfDir, "pre");
   const postDir = path.join(sfDir, "post");
   const mixinsDir = path.join(sfDir, "mixins");
 
-  mkdirSync(schemaDir, { recursive: true });
-  mkdirSync(preDir, { recursive: true });
-  mkdirSync(postDir, { recursive: true });
-  mkdirSync(mixinsDir, { recursive: true });
+  for (const dir of [tablesDir, enumsDir, functionsDir, viewsDir, rolesDir, preDir, postDir, mixinsDir]) {
+    mkdirSync(dir, { recursive: true });
+  }
 
   const cleanup = () => {
     if (existsSync(baseDir)) {
@@ -102,7 +111,7 @@ export function createTempProject(): {
     }
   };
 
-  return { baseDir, schemaDir, preDir, postDir, mixinsDir, cleanup };
+  return { baseDir, tablesDir, enumsDir, functionsDir, viewsDir, rolesDir, preDir, postDir, mixinsDir, sfDir, cleanup };
 }
 
 /**

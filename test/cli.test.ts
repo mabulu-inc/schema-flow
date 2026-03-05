@@ -71,11 +71,14 @@ describe("CLI", () => {
       const baseDir = path.join("/tmp", `sf_cli_init_${Date.now()}`);
       try {
         const output = run(`init --dir ${baseDir}`);
-        expect(output).toContain("schema-flow directory structure");
-        expect(existsSync(path.join(baseDir, "schema-flow", "schema"))).toBe(true);
-        expect(existsSync(path.join(baseDir, "schema-flow", "pre"))).toBe(true);
-        expect(existsSync(path.join(baseDir, "schema-flow", "post"))).toBe(true);
-        expect(existsSync(path.join(baseDir, "schema-flow", "mixins"))).toBe(true);
+        expect(output).toContain("schema directory structure");
+        expect(existsSync(path.join(baseDir, "schema", "tables"))).toBe(true);
+        expect(existsSync(path.join(baseDir, "schema", "enums"))).toBe(true);
+        expect(existsSync(path.join(baseDir, "schema", "functions"))).toBe(true);
+        expect(existsSync(path.join(baseDir, "schema", "views"))).toBe(true);
+        expect(existsSync(path.join(baseDir, "schema", "pre"))).toBe(true);
+        expect(existsSync(path.join(baseDir, "schema", "post"))).toBe(true);
+        expect(existsSync(path.join(baseDir, "schema", "mixins"))).toBe(true);
       } finally {
         rmSync(baseDir, { recursive: true, force: true });
       }
@@ -122,7 +125,7 @@ describe("CLI", () => {
     describe("plan", () => {
       it("shows planned operations without applying", () => {
         writeSchema(
-          ctx.project.schemaDir,
+          ctx.project.tablesDir,
           "users.yaml",
           `table: users
 columns:
@@ -145,7 +148,7 @@ columns:
         await execSql(ctx.connectionString, `CREATE TABLE items (id serial PRIMARY KEY, obsolete text NOT NULL)`);
 
         writeSchema(
-          ctx.project.schemaDir,
+          ctx.project.tablesDir,
           "items.yaml",
           `table: items
 columns:
@@ -167,7 +170,7 @@ columns:
     describe("run", () => {
       it("applies migrations end-to-end", async () => {
         writeSchema(
-          ctx.project.schemaDir,
+          ctx.project.tablesDir,
           "users.yaml",
           `table: users
 columns:
@@ -188,7 +191,7 @@ columns:
 
       it("run migrate only affects schema phase", async () => {
         writeSchema(
-          ctx.project.schemaDir,
+          ctx.project.tablesDir,
           "items.yaml",
           `table: items
 columns:
@@ -212,7 +215,7 @@ columns:
         );
 
         writeSchema(
-          ctx.project.schemaDir,
+          ctx.project.tablesDir,
           "things.yaml",
           `table: things
 columns:
@@ -240,7 +243,7 @@ columns:
         );
 
         writeSchema(
-          ctx.project.schemaDir,
+          ctx.project.tablesDir,
           "things.yaml",
           `table: things
 columns:
@@ -265,7 +268,7 @@ columns:
     describe("validate", () => {
       it("exits 0 and shows passed for valid schema", () => {
         writeSchema(
-          ctx.project.schemaDir,
+          ctx.project.tablesDir,
           "users.yaml",
           `table: users
 columns:
@@ -286,7 +289,7 @@ columns:
 
       it("exits 1 for schema with bad SQL", () => {
         writeSchema(
-          ctx.project.schemaDir,
+          ctx.project.tablesDir,
           "orders.yaml",
           `table: orders
 rls: true

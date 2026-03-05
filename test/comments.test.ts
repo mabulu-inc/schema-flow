@@ -30,7 +30,7 @@ describe("comments", () => {
       const project = createTempProject();
       try {
         const filePath = writeSchema(
-          project.schemaDir,
+          project.tablesDir,
           "users.yaml",
           `
 table: users
@@ -57,7 +57,7 @@ columns:
       const project = createTempProject();
       try {
         const filePath = writeSchema(
-          project.schemaDir,
+          project.tablesDir,
           "users.yaml",
           `
 table: users
@@ -84,7 +84,7 @@ indexes:
       const project = createTempProject();
       try {
         const filePath = writeSchema(
-          project.schemaDir,
+          project.tablesDir,
           "users.yaml",
           `
 table: users
@@ -111,7 +111,7 @@ triggers:
       const project = createTempProject();
       try {
         const filePath = writeSchema(
-          project.schemaDir,
+          project.tablesDir,
           "users.yaml",
           `
 table: users
@@ -138,7 +138,7 @@ policies:
       const project = createTempProject();
       try {
         const filePath = writeSchema(
-          project.schemaDir,
+          project.tablesDir,
           "users.yaml",
           `
 table: users
@@ -165,8 +165,8 @@ checks:
       const project = createTempProject();
       try {
         const filePath = writeSchema(
-          project.schemaDir,
-          "enum_status.yaml",
+          project.enumsDir,
+          "status.yaml",
           `
 enum: status
 values: [active, inactive]
@@ -184,8 +184,8 @@ comment: "User account status"
       const project = createTempProject();
       try {
         const filePath = writeSchema(
-          project.schemaDir,
-          "view_active.yaml",
+          project.viewsDir,
+          "active.yaml",
           `
 view: active_users
 query: "SELECT * FROM users WHERE active = true"
@@ -203,7 +203,7 @@ comment: "Only active users"
       const project = createTempProject();
       try {
         const filePath = writeSchema(
-          project.schemaDir,
+          project.viewsDir,
           "mv_stats.yaml",
           `
 materialized_view: user_stats
@@ -222,8 +222,8 @@ comment: "User statistics"
       const project = createTempProject();
       try {
         const filePath = writeSchema(
-          project.schemaDir,
-          "fn_audit.yaml",
+          project.functionsDir,
+          "audit.yaml",
           `
 name: audit_log
 language: plpgsql

@@ -48,7 +48,7 @@ describe("retry — advisory lock contention", () => {
   it("migration fails after exhausting retries when advisory lock is held", async () => {
     // Set up a schema so migration has something to do
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "retry_lock.yaml",
       `
 table: retry_lock
@@ -81,7 +81,7 @@ columns:
 
   it("migration succeeds when advisory lock is released during retry window", async () => {
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "retry_lock_ok.yaml",
       `
 table: retry_lock_ok
@@ -122,7 +122,7 @@ describe("retry — INVALID index recovery", () => {
   it("re-run migration succeeds when table has an INVALID index from a prior failed attempt", async () => {
     // v1: create the table
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "retry_invalid_idx.yaml",
       `
 table: retry_invalid_idx
@@ -173,7 +173,7 @@ columns:
     // v2: declare the index in schema
     await closePool();
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "retry_invalid_idx.yaml",
       `
 table: retry_invalid_idx
@@ -214,7 +214,7 @@ describe("retry — DDL lock contention", () => {
   it("migration retries and succeeds when a competing lock is released", async () => {
     // v1: create table with a row so we can lock it
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "retry_ddl.yaml",
       `
 table: retry_ddl
@@ -254,7 +254,7 @@ columns:
     // v2: add a column — ALTER TABLE ADD COLUMN needs AccessExclusive
     await closePool();
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "retry_ddl.yaml",
       `
 table: retry_ddl

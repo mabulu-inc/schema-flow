@@ -12,7 +12,7 @@ describe("generated columns", () => {
       const project = createTempProject();
       try {
         const filePath = writeSchema(
-          project.schemaDir,
+          project.tablesDir,
           "users.yaml",
           `
 table: users

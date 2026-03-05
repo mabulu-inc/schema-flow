@@ -18,7 +18,7 @@ describe("drift detection", () => {
     await execSql(ctx.connectionString, `CREATE TABLE users (id serial PRIMARY KEY, email varchar(255) NOT NULL)`);
 
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "users.yaml",
       `table: users
 columns:
@@ -43,7 +43,7 @@ columns:
 
   it("detects table missing from DB", async () => {
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "users.yaml",
       `table: users
 columns:
@@ -83,7 +83,7 @@ columns:
     await execSql(ctx.connectionString, `CREATE TABLE users (id serial PRIMARY KEY)`);
 
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "users.yaml",
       `table: users
 columns:
@@ -111,7 +111,7 @@ columns:
     await execSql(ctx.connectionString, `CREATE TABLE users (id serial PRIMARY KEY, obsolete text)`);
 
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "users.yaml",
       `table: users
 columns:
@@ -137,7 +137,7 @@ columns:
     await execSql(ctx.connectionString, `CREATE TABLE users (id serial PRIMARY KEY, name text)`);
 
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "users.yaml",
       `table: users
 columns:
@@ -165,7 +165,7 @@ columns:
     await execSql(ctx.connectionString, `CREATE TABLE users (id serial PRIMARY KEY)`);
 
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "users.yaml",
       `table: users
 columns:
@@ -204,8 +204,8 @@ columns:
 
     // Write YAML with wrong return type (record instead of TABLE)
     writeSchema(
-      ctx.project.schemaDir,
-      "fn_session_authorization.yaml",
+      ctx.project.functionsDir,
+      "session_authorization.yaml",
       `name: session_authorization
 language: plpgsql
 returns: record
@@ -244,8 +244,8 @@ security: definer
     );
 
     writeSchema(
-      ctx.project.schemaDir,
-      "fn_greet.yaml",
+      ctx.project.functionsDir,
+      "greet.yaml",
       `name: greet
 language: plpgsql
 returns: text
@@ -282,8 +282,8 @@ replace: true
     );
 
     writeSchema(
-      ctx.project.schemaDir,
-      "fn_add_one.yaml",
+      ctx.project.functionsDir,
+      "add_one.yaml",
       `name: add_one
 language: plpgsql
 returns: integer

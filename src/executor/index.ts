@@ -149,7 +149,35 @@ export async function runMigrate(config: SchemaFlowConfig): Promise<ExecutionRes
   const errors: string[] = [];
   let opsExecuted = 0;
 
-  const schemaFiles = await discoverSchemaFiles(config.schemaDir);
+  // Discover files from each category directory
+  const tableFiles = await discoverSchemaFiles(config.tablesDir);
+  const functionFiles = await discoverSchemaFiles(config.functionsDir);
+  const enumFiles = await discoverSchemaFiles(config.enumsDir);
+  const viewFiles = await discoverSchemaFiles(config.viewsDir);
+  const roleFiles = await discoverSchemaFiles(config.rolesDir);
+
+  // Extensions file lives at baseDir/extensions.yaml
+  const extensionFiles: string[] = [];
+  const { existsSync } = await import("node:fs");
+  for (const ext of ["extensions.yaml", "extensions.yml"]) {
+    const p = path.join(config.baseDir, ext);
+    if (existsSync(p)) extensionFiles.push(p);
+  }
+
+  // Materialized views use mv_ prefix within views dir
+  const mvFiles = viewFiles.filter((f) => path.basename(f).startsWith("mv_"));
+  const regularViewFiles = viewFiles.filter((f) => !path.basename(f).startsWith("mv_"));
+
+  const schemaFiles = [
+    ...tableFiles,
+    ...functionFiles,
+    ...enumFiles,
+    ...regularViewFiles,
+    ...mvFiles,
+    ...extensionFiles,
+    ...roleFiles,
+  ];
+
   if (schemaFiles.length === 0) {
     logger.info("No schema files found — skipping migration phase");
     return {
@@ -218,26 +246,6 @@ export async function runMigrate(config: SchemaFlowConfig): Promise<ExecutionRes
             dryRun: config.dryRun,
             blockedDestructive: 0,
           };
-        }
-
-        // Classify schema files by type
-        const functionFiles: string[] = [];
-        const tableFiles: string[] = [];
-        const enumFiles: string[] = [];
-        const extensionFiles: string[] = [];
-        const viewFiles: string[] = [];
-        const mvFiles: string[] = [];
-        const roleFiles: string[] = [];
-
-        for (const f of schemaFiles) {
-          const base = path.basename(f);
-          if (base.startsWith("fn_")) functionFiles.push(f);
-          else if (base.startsWith("enum_")) enumFiles.push(f);
-          else if (base === "extensions.yaml" || base === "extensions.yml") extensionFiles.push(f);
-          else if (base.startsWith("view_")) viewFiles.push(f);
-          else if (base.startsWith("mv_")) mvFiles.push(f);
-          else if (base.startsWith("role_")) roleFiles.push(f);
-          else tableFiles.push(f);
         }
 
         // Parse and apply function files first
@@ -357,7 +365,7 @@ export async function runMigrate(config: SchemaFlowConfig): Promise<ExecutionRes
 
         // Parse view files
         const parsedViews: ViewSchema[] = [];
-        for (const f of viewFiles) {
+        for (const f of regularViewFiles) {
           try {
             parsedViews.push(parseViewFile(f));
           } catch (err) {
@@ -759,25 +767,17 @@ export async function runValidate(config: SchemaFlowConfig): Promise<ValidationR
   const errors: string[] = [];
   let opsChecked = 0;
 
-  const schemaFiles = await discoverSchemaFiles(config.schemaDir);
-  if (schemaFiles.length === 0) {
+  const valTableFiles = await discoverSchemaFiles(config.tablesDir);
+  const valFunctionFiles = await discoverSchemaFiles(config.functionsDir);
+
+  if (valTableFiles.length === 0 && valFunctionFiles.length === 0) {
     logger.info("No schema files found — nothing to validate");
     return { valid: true, errors: [], operationsChecked: 0 };
   }
 
-  // Separate function files from table files
-  const NON_TABLE_PREFIXES = ["fn_", "enum_", "view_", "mv_", "role_"];
-  const functionFiles = schemaFiles.filter((f) => path.basename(f).startsWith("fn_"));
-  const tableFiles = schemaFiles.filter((f) => {
-    const base = path.basename(f);
-    return (
-      !NON_TABLE_PREFIXES.some((p) => base.startsWith(p)) && base !== "extensions.yaml" && base !== "extensions.yml"
-    );
-  });
-
   // Parse function files
   const parsedFunctions: FunctionSchema[] = [];
-  for (const f of functionFiles) {
+  for (const f of valFunctionFiles) {
     try {
       parsedFunctions.push(parseFunctionFile(f));
     } catch (err) {
@@ -792,7 +792,7 @@ export async function runValidate(config: SchemaFlowConfig): Promise<ValidationR
   }
 
   // Parse ALL table schema files
-  const allSchemas = tableFiles
+  const allSchemas = valTableFiles
     .map((f) => {
       try {
         return parseTableFile(f);
@@ -987,7 +987,18 @@ export interface BaselineResult {
 export async function runBaseline(config: SchemaFlowConfig): Promise<BaselineResult> {
   logger.step("BASELINE", "Recording current schema state without executing migrations");
 
-  const schemaFiles = await discoverSchemaFiles(config.schemaDir);
+  const baselineTableFiles = await discoverSchemaFiles(config.tablesDir);
+  const baselineFuncFiles = await discoverSchemaFiles(config.functionsDir);
+  const baselineEnumFiles = await discoverSchemaFiles(config.enumsDir);
+  const baselineViewFiles = await discoverSchemaFiles(config.viewsDir);
+  const baselineRoleFiles = await discoverSchemaFiles(config.rolesDir);
+  const schemaFiles = [
+    ...baselineTableFiles,
+    ...baselineFuncFiles,
+    ...baselineEnumFiles,
+    ...baselineViewFiles,
+    ...baselineRoleFiles,
+  ];
   if (schemaFiles.length === 0) {
     logger.info("No schema files found — nothing to baseline");
     return { success: true, filesRecorded: 0, errors: [] };

@@ -51,7 +51,7 @@ describe("alter — column alterations", () => {
 
   it("add column to existing table", async () => {
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "alt_add_col.yaml",
       `
 table: alt_add_col
@@ -69,7 +69,7 @@ columns:
     // v2: add email column
     await closePool();
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "alt_add_col.yaml",
       `
 table: alt_add_col
@@ -90,7 +90,7 @@ columns:
 
   it("widen column type varchar(50) → varchar(255)", async () => {
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "alt_widen.yaml",
       `
 table: alt_widen
@@ -108,7 +108,7 @@ columns:
     // v2: widen
     await closePool();
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "alt_widen.yaml",
       `
 table: alt_widen
@@ -132,7 +132,7 @@ columns:
 
   it("change default value", async () => {
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "alt_default.yaml",
       `
 table: alt_default
@@ -152,7 +152,7 @@ columns:
     // v2: change default
     await closePool();
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "alt_default.yaml",
       `
 table: alt_default
@@ -172,7 +172,7 @@ columns:
 
   it("drop NOT NULL (widen)", async () => {
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "alt_drop_nn.yaml",
       `
 table: alt_drop_nn
@@ -190,7 +190,7 @@ columns:
     // v2: make nullable
     await closePool();
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "alt_drop_nn.yaml",
       `
 table: alt_drop_nn
@@ -209,7 +209,7 @@ columns:
 
   it("set NOT NULL (safe pattern)", async () => {
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "alt_set_nn.yaml",
       `
 table: alt_set_nn
@@ -228,7 +228,7 @@ columns:
     // v2: set NOT NULL
     await closePool();
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "alt_set_nn.yaml",
       `
 table: alt_set_nn
@@ -246,7 +246,7 @@ columns:
 
   it("add generated column", async () => {
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "alt_gen.yaml",
       `
 table: alt_gen
@@ -267,7 +267,7 @@ columns:
     // v2: add generated column
     await closePool();
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "alt_gen.yaml",
       `
 table: alt_gen
@@ -301,7 +301,7 @@ describe("alter — destructive column operations", () => {
 
   it("drop column blocked without allowDestructive", async () => {
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "alt_drop_col.yaml",
       `
 table: alt_drop_col
@@ -322,7 +322,7 @@ columns:
     // v2: remove extra — should be blocked
     await closePool();
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "alt_drop_col.yaml",
       `
 table: alt_drop_col
@@ -342,7 +342,7 @@ columns:
 
   it("drop column allowed with allowDestructive", async () => {
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "alt_drop_col2.yaml",
       `
 table: alt_drop_col2
@@ -363,7 +363,7 @@ columns:
     // v2: remove extra with allowDestructive
     await closePool();
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "alt_drop_col2.yaml",
       `
 table: alt_drop_col2
@@ -381,7 +381,7 @@ columns:
 
   it("narrow type blocked without allowDestructive", async () => {
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "alt_narrow.yaml",
       `
 table: alt_narrow
@@ -399,7 +399,7 @@ columns:
     // v2: narrow varchar(255) → varchar(50) — should be blocked
     await closePool();
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "alt_narrow.yaml",
       `
 table: alt_narrow
@@ -424,7 +424,7 @@ describe("alter — index alterations", () => {
 
   it("add index to existing table", async () => {
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "alt_idx.yaml",
       `
 table: alt_idx
@@ -442,7 +442,7 @@ columns:
     // v2: add index
     await closePool();
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "alt_idx.yaml",
       `
 table: alt_idx
@@ -463,7 +463,7 @@ indexes:
 
   it("add unique index to existing table", async () => {
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "alt_uidx.yaml",
       `
 table: alt_uidx
@@ -480,7 +480,7 @@ columns:
     // v2: add unique index
     await closePool();
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "alt_uidx.yaml",
       `
 table: alt_uidx
@@ -506,7 +506,7 @@ indexes:
 
   it("change index columns (drop + recreate)", async () => {
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "alt_idx_cols.yaml",
       `
 table: alt_idx_cols
@@ -527,7 +527,7 @@ indexes:
     // v2: change index columns
     await closePool();
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "alt_idx_cols.yaml",
       `
 table: alt_idx_cols
@@ -548,7 +548,7 @@ indexes:
 
   it("drop index blocked without allowDestructive", async () => {
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "alt_idx_drop.yaml",
       `
 table: alt_idx_drop
@@ -569,7 +569,7 @@ indexes:
     // v2: remove index — should be blocked
     await closePool();
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "alt_idx_drop.yaml",
       `
 table: alt_idx_drop
@@ -588,7 +588,7 @@ columns:
 
   it("drop index allowed with allowDestructive", async () => {
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "alt_idx_drop2.yaml",
       `
 table: alt_idx_drop2
@@ -609,7 +609,7 @@ indexes:
     // v2: remove index with allowDestructive
     await closePool();
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "alt_idx_drop2.yaml",
       `
 table: alt_idx_drop2
@@ -633,7 +633,7 @@ describe("alter — constraint alterations", () => {
 
   it("add CHECK to existing table", async () => {
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "alt_check.yaml",
       `
 table: alt_check
@@ -650,7 +650,7 @@ columns:
     // v2: add CHECK
     await closePool();
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "alt_check.yaml",
       `
 table: alt_check
@@ -674,7 +674,7 @@ checks:
 
   it("add FK to existing table", async () => {
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "alt_fk_parent.yaml",
       `
 table: alt_fk_parent
@@ -685,7 +685,7 @@ columns:
 `,
     );
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "alt_fk_child.yaml",
       `
 table: alt_fk_child
@@ -703,7 +703,7 @@ columns:
     // v2: add FK reference
     await closePool();
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "alt_fk_child.yaml",
       `
 table: alt_fk_child
@@ -731,7 +731,7 @@ columns:
 
   it("add multi-column unique constraint", async () => {
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "alt_multi_uq.yaml",
       `
 table: alt_multi_uq
@@ -750,7 +750,7 @@ columns:
     // v2: add multi-col unique
     await closePool();
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "alt_multi_uq.yaml",
       `
 table: alt_multi_uq
@@ -779,7 +779,7 @@ unique_constraints:
 
   it("add single-column unique", async () => {
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "alt_single_uq.yaml",
       `
 table: alt_single_uq
@@ -796,7 +796,7 @@ columns:
     // v2: add unique: true
     await closePool();
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "alt_single_uq.yaml",
       `
 table: alt_single_uq
@@ -828,8 +828,8 @@ describe("alter — trigger alterations", () => {
 
   function writeNoopFn() {
     writeSchema(
-      ctx.project.schemaDir,
-      "fn_alt_noop.yaml",
+      ctx.project.functionsDir,
+      "alt_noop.yaml",
       `
 function: alt_noop
 language: plpgsql
@@ -844,7 +844,7 @@ body: |
   it("add trigger to existing table", async () => {
     writeNoopFn();
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "alt_trg.yaml",
       `
 table: alt_trg
@@ -863,7 +863,7 @@ columns:
     // v2: add trigger
     await closePool();
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "alt_trg.yaml",
       `
 table: alt_trg
@@ -889,7 +889,7 @@ triggers:
   it("change trigger timing BEFORE → AFTER", async () => {
     writeNoopFn();
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "alt_trg_timing.yaml",
       `
 table: alt_trg_timing
@@ -919,7 +919,7 @@ triggers:
     // v2: change to AFTER
     await closePool();
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "alt_trg_timing.yaml",
       `
 table: alt_trg_timing
@@ -955,7 +955,7 @@ describe("alter — RLS & policy alterations", () => {
 
   it("enable RLS on existing table", async () => {
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "alt_rls.yaml",
       `
 table: alt_rls
@@ -973,7 +973,7 @@ columns:
     // v2: enable RLS
     await closePool();
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "alt_rls.yaml",
       `
 table: alt_rls
@@ -992,7 +992,7 @@ rls: true
 
   it("add policy to existing table", async () => {
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "alt_pol.yaml",
       `
 table: alt_pol
@@ -1011,7 +1011,7 @@ rls: true
     // v2: add policy
     await closePool();
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "alt_pol.yaml",
       `
 table: alt_pol
@@ -1035,7 +1035,7 @@ policies:
 
   it("disable RLS blocked without allowDestructive", async () => {
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "alt_rls_off.yaml",
       `
 table: alt_rls_off
@@ -1052,7 +1052,7 @@ rls: true
     // v2: remove rls — should be blocked
     await closePool();
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "alt_rls_off.yaml",
       `
 table: alt_rls_off
@@ -1075,15 +1075,15 @@ describe("alter — enum alterations", () => {
 
   it("add enum value", async () => {
     writeSchema(
-      ctx.project.schemaDir,
-      "enum_alt_status.yaml",
+      ctx.project.enumsDir,
+      "alt_status.yaml",
       `
 enum: alt_status
 values: [a, b, c]
 `,
     );
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "alt_enum_tbl.yaml",
       `
 table: alt_enum_tbl
@@ -1102,8 +1102,8 @@ columns:
     // v2: add value 'd'
     await closePool();
     writeSchema(
-      ctx.project.schemaDir,
-      "enum_alt_status.yaml",
+      ctx.project.enumsDir,
+      "alt_status.yaml",
       `
 enum: alt_status
 values: [a, b, c, d]
@@ -1120,15 +1120,15 @@ values: [a, b, c, d]
 
   it("create enum + use in table column", async () => {
     writeSchema(
-      ctx.project.schemaDir,
-      "enum_alt_role.yaml",
+      ctx.project.enumsDir,
+      "alt_role.yaml",
       `
 enum: alt_role
 values: [admin, user, guest]
 `,
     );
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "alt_role_tbl.yaml",
       `
 table: alt_role_tbl
@@ -1162,7 +1162,7 @@ describe("alter — view alterations", () => {
 
   it("change view query", async () => {
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "alt_view_src.yaml",
       `
 table: alt_view_src
@@ -1180,8 +1180,8 @@ columns:
 `,
     );
     writeSchema(
-      ctx.project.schemaDir,
-      "view_alt_names.yaml",
+      ctx.project.viewsDir,
+      "alt_names.yaml",
       `
 view: alt_names
 query: "SELECT id, name FROM alt_view_src"
@@ -1199,8 +1199,8 @@ query: "SELECT id, name FROM alt_view_src"
     // supports changing the query as long as column names/types stay the same
     await closePool();
     writeSchema(
-      ctx.project.schemaDir,
-      "view_alt_names.yaml",
+      ctx.project.viewsDir,
+      "alt_names.yaml",
       `
 view: alt_names
 query: "SELECT id, name FROM alt_view_src WHERE active = true"
@@ -1218,7 +1218,7 @@ query: "SELECT id, name FROM alt_view_src WHERE active = true"
 
   it("change materialized view query", async () => {
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "alt_mv_src.yaml",
       `
 table: alt_mv_src
@@ -1232,7 +1232,7 @@ columns:
 `,
     );
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.viewsDir,
       "mv_alt_stats.yaml",
       `
 materialized_view: alt_stats
@@ -1248,7 +1248,7 @@ query: "SELECT count(*) AS cnt FROM alt_mv_src"
     // v2: change MV query
     await closePool();
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.viewsDir,
       "mv_alt_stats.yaml",
       `
 materialized_view: alt_stats
@@ -1271,8 +1271,8 @@ describe("alter — function alterations", () => {
 
   it("change function body", async () => {
     writeSchema(
-      ctx.project.schemaDir,
-      "fn_alt_double.yaml",
+      ctx.project.functionsDir,
+      "alt_double.yaml",
       `
 function: alt_double
 language: sql
@@ -1288,8 +1288,8 @@ body: "SELECT n * 2"
     // v2: change body
     await closePool();
     writeSchema(
-      ctx.project.schemaDir,
-      "fn_alt_double.yaml",
+      ctx.project.functionsDir,
+      "alt_double.yaml",
       `
 function: alt_double
 language: sql
@@ -1305,8 +1305,8 @@ body: "SELECT n * 3"
 
   it("change function security invoker → definer", async () => {
     writeSchema(
-      ctx.project.schemaDir,
-      "fn_alt_sec.yaml",
+      ctx.project.functionsDir,
+      "alt_sec.yaml",
       `
 function: alt_sec
 language: plpgsql
@@ -1329,8 +1329,8 @@ body: |
     // v2: change to definer
     await closePool();
     writeSchema(
-      ctx.project.schemaDir,
-      "fn_alt_sec.yaml",
+      ctx.project.functionsDir,
+      "alt_sec.yaml",
       `
 function: alt_sec
 language: plpgsql
@@ -1359,7 +1359,7 @@ describe("alter — comment operations", () => {
 
   it("add table + column comments", async () => {
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "alt_comments.yaml",
       `
 table: alt_comments
@@ -1381,7 +1381,7 @@ columns:
 
   it("change comment", async () => {
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "alt_comment_chg.yaml",
       `
 table: alt_comment_chg
@@ -1398,7 +1398,7 @@ columns:
     // v2: change comment
     await closePool();
     writeSchema(
-      ctx.project.schemaDir,
+      ctx.project.tablesDir,
       "alt_comment_chg.yaml",
       `
 table: alt_comment_chg
