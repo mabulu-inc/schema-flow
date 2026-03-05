@@ -247,6 +247,96 @@ describe("generateFromDb", () => {
     expect(ordersContent).not.toContain("seeds:");
   });
 
+  it("generates table grants in YAML", async () => {
+    await execSql(ctx.connectionString, `DROP ROLE IF EXISTS test_reader`);
+    await execSql(ctx.connectionString, `CREATE ROLE test_reader`);
+    await execSql(ctx.connectionString, `CREATE TABLE granted_table (id serial PRIMARY KEY, name text NOT NULL)`);
+    await execSql(ctx.connectionString, `GRANT SELECT, INSERT ON granted_table TO test_reader`);
+
+    const config = resolveConfig({
+      connectionString: ctx.connectionString,
+      baseDir: ctx.project.baseDir,
+    });
+
+    await generateFromDb(config);
+
+    const content = readFileSync(path.join(ctx.project.tablesDir, "granted_table.yaml"), "utf-8");
+    expect(content).toContain("grants:");
+    expect(content).toContain("test_reader");
+    expect(content).toContain("SELECT");
+    expect(content).toContain("INSERT");
+  });
+
+  it("generates view grants in YAML", async () => {
+    await execSql(ctx.connectionString, `DROP ROLE IF EXISTS view_reader`);
+    await execSql(ctx.connectionString, `CREATE ROLE view_reader`);
+    await execSql(ctx.connectionString, `CREATE TABLE base_tbl (id serial PRIMARY KEY)`);
+    await execSql(ctx.connectionString, `CREATE VIEW granted_view AS SELECT id FROM base_tbl`);
+    await execSql(ctx.connectionString, `GRANT SELECT ON granted_view TO view_reader`);
+
+    const config = resolveConfig({
+      connectionString: ctx.connectionString,
+      baseDir: ctx.project.baseDir,
+    });
+
+    await generateFromDb(config);
+
+    const content = readFileSync(path.join(ctx.project.viewsDir, "granted_view.yaml"), "utf-8");
+    expect(content).toContain("grants:");
+    expect(content).toContain("view_reader");
+    expect(content).toContain("SELECT");
+  });
+
+  it("generates materialized view grants in YAML", async () => {
+    await execSql(ctx.connectionString, `DROP ROLE IF EXISTS mv_reader`);
+    await execSql(ctx.connectionString, `CREATE ROLE mv_reader`);
+    await execSql(ctx.connectionString, `CREATE TABLE mv_base (id serial PRIMARY KEY)`);
+    await execSql(ctx.connectionString, `CREATE MATERIALIZED VIEW granted_mv AS SELECT id FROM mv_base`);
+    await execSql(ctx.connectionString, `GRANT SELECT ON granted_mv TO mv_reader`);
+
+    const config = resolveConfig({
+      connectionString: ctx.connectionString,
+      baseDir: ctx.project.baseDir,
+    });
+
+    await generateFromDb(config);
+
+    const content = readFileSync(path.join(ctx.project.viewsDir, "mv_granted_mv.yaml"), "utf-8");
+    expect(content).toContain("grants:");
+    expect(content).toContain("mv_reader");
+    expect(content).toContain("SELECT");
+  });
+
+  it("generates role YAML files from existing roles", async () => {
+    await execSql(ctx.connectionString, `DROP ROLE IF EXISTS app_user`);
+    await execSql(ctx.connectionString, `DROP ROLE IF EXISTS app_admin`);
+    await execSql(ctx.connectionString, `CREATE ROLE app_user LOGIN`);
+    await execSql(ctx.connectionString, `CREATE ROLE app_admin CREATEROLE`);
+    await execSql(ctx.connectionString, `GRANT app_admin TO app_user`);
+
+    const config = resolveConfig({
+      connectionString: ctx.connectionString,
+      baseDir: ctx.project.baseDir,
+    });
+
+    await generateFromDb(config);
+
+    const userFile = path.join(ctx.project.rolesDir, "app_user.yaml");
+    const adminFile = path.join(ctx.project.rolesDir, "app_admin.yaml");
+    expect(existsSync(userFile)).toBe(true);
+    expect(existsSync(adminFile)).toBe(true);
+
+    const userContent = readFileSync(userFile, "utf-8");
+    expect(userContent).toContain("role: app_user");
+    expect(userContent).toContain("login: true");
+    expect(userContent).toContain("in:");
+    expect(userContent).toContain("app_admin");
+
+    const adminContent = readFileSync(adminFile, "utf-8");
+    expect(adminContent).toContain("role: app_admin");
+    expect(adminContent).toContain("createrole: true");
+  });
+
   it("generates SETOF return type for set-returning functions", async () => {
     await execSql(
       ctx.connectionString,
@@ -279,5 +369,40 @@ describe("generateFromDb", () => {
     const content = readFileSync(fnFile, "utf-8");
     expect(content).toContain("SETOF record");
     expect(content).not.toMatch(/returns: record\b/);
+  });
+
+  it("generates function body as block literal without escaping", async () => {
+    await execSql(ctx.connectionString, `CREATE TABLE sync_test (id uuid PRIMARY KEY, salesforce_id text, name text)`);
+    await execSql(
+      ctx.connectionString,
+      `CREATE OR REPLACE FUNCTION sync_trigger()
+       RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER AS $$
+       DECLARE
+         rec_id text;
+       BEGIN
+         IF NEW."salesforce_id" IS NULL THEN
+           rec_id := NEW."id"::text;
+         END IF;
+         RETURN NEW;
+       END;
+       $$`,
+    );
+
+    const config = resolveConfig({
+      connectionString: ctx.connectionString,
+      baseDir: ctx.project.baseDir,
+    });
+
+    await generateFromDb(config);
+
+    const fnFile = path.join(ctx.project.functionsDir, "sync_trigger.yaml");
+    expect(existsSync(fnFile)).toBe(true);
+
+    const content = readFileSync(fnFile, "utf-8");
+    // Should use block literal style, not double-quoted with escapes
+    expect(content).toContain("body: |");
+    expect(content).not.toContain('\\"');
+    // Should not have leading blank line in body
+    expect(content).not.toMatch(/body: \|\n\n/);
   });
 });

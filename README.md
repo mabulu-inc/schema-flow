@@ -1203,7 +1203,7 @@ Bootstrap your schema files from a live database:
 npx @mabulu-inc/schema-flow generate --db "postgresql://user:pass@localhost:5432/mydb"
 ```
 
-This introspects every table, function, enum, view, and extension in the `public` schema and writes YAML files into `schema/tables/`, `schema/functions/`, `schema/enums/`, `schema/views/`, etc.
+This introspects every table, function, enum, view, materialized view, role, and extension in the `public` schema and writes YAML files into `schema/tables/`, `schema/functions/`, `schema/enums/`, `schema/views/`, `schema/roles/`, etc. Table-level grants, view grants, materialized view grants, and function grants are all included in the generated YAML.
 
 ## Change Tracking
 

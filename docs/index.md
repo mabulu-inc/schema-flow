@@ -45,7 +45,7 @@ Set a [personal access token](https://github.com/settings/tokens/new?scopes=read
 **2. Generate or init:**
 
 ```bash
-# Generate YAML from an existing database
+# Generate YAML from an existing database (tables, functions, enums, views, roles, grants)
 DATABASE_URL="postgresql://..." npx @mabulu-inc/schema-flow generate
 
 # Or start fresh

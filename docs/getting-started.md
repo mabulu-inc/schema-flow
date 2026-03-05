@@ -45,7 +45,7 @@ If you already have a PostgreSQL database, generate YAML files from it:
 DATABASE_URL="postgresql://user:pass@localhost:5432/mydb" npx @mabulu-inc/schema-flow generate
 ```
 
-This creates one YAML file per table, enum, function, view, and role in the `schema/` directory. The output matches your live database exactly.
+This creates one YAML file per table, enum, function, view, materialized view, and role in the `schema/` directory. Table-level grants, view grants, materialized view grants, and function grants are all included in the generated YAML. The output matches your live database exactly.
 
 Then mark everything as applied:
 

@@ -123,7 +123,7 @@ npx @mabulu-inc/schema-flow init
 
 ### `generate`
 
-Generate YAML schema files from an existing database.
+Generate YAML schema files from an existing database. Produces one YAML file per table, enum, function, view, materialized view, and role. Table-level grants, view grants, materialized view grants, and function grants are included in the generated YAML.
 
 ```bash
 npx @mabulu-inc/schema-flow generate
