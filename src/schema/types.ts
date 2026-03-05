@@ -123,6 +123,8 @@ export interface MixinSchema {
   force_rls?: boolean;
   /** RLS policies to add */
   policies?: PolicyDef[];
+  /** Table grants to add */
+  grants?: GrantDef[];
 }
 
 export interface PrecheckDef {
@@ -159,6 +161,8 @@ export interface TableSchema {
   force_rls?: boolean;
   /** RLS policies */
   policies?: PolicyDef[];
+  /** Table grants */
+  grants?: GrantDef[];
   /** Pre-migration checks: SQL assertions that must pass before migration */
   prechecks?: PrecheckDef[];
   /** Table description/comment */
@@ -220,4 +224,38 @@ export interface MaterializedViewSchema {
   indexes?: IndexDef[];
   /** Materialized view description/comment */
   comment?: string;
+}
+
+export interface RoleSchema {
+  /** Role name */
+  role: string;
+  /** Whether the role can log in (default false) */
+  login?: boolean;
+  /** Superuser privilege (default false) */
+  superuser?: boolean;
+  /** Can create databases (default false) */
+  createdb?: boolean;
+  /** Can create roles (default false) */
+  createrole?: boolean;
+  /** Inherits privileges of granted roles (default true) */
+  inherit?: boolean;
+  /** Maximum connections (-1 = unlimited, default -1) */
+  connection_limit?: number;
+  /** Role memberships — GRANT <role> TO this role */
+  in?: string[];
+  /** Role description/comment */
+  comment?: string;
+}
+
+export type GrantPrivilege = "SELECT" | "INSERT" | "UPDATE" | "DELETE" | "TRUNCATE" | "REFERENCES" | "TRIGGER" | "ALL";
+
+export interface GrantDef {
+  /** Role(s) to grant to */
+  to: string | string[];
+  /** Privileges to grant */
+  privileges: GrantPrivilege[];
+  /** If specified, grant applies only to these columns (column-level grant) */
+  columns?: string[];
+  /** WITH GRANT OPTION (default false) */
+  with_grant_option?: boolean;
 }

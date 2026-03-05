@@ -13,6 +13,7 @@ import type {
   IndexDef,
   CheckDef,
   UniqueConstraintDef,
+  RoleSchema,
 } from "../schema/types.js";
 
 export interface DbColumn {
@@ -998,4 +999,131 @@ function resolveColumnType(col: DbColumn): string {
     default:
       return udt_name;
   }
+}
+
+// ─── Role Introspection ──────────────────────────────────────────────────────
+
+/** System roles to exclude from introspection */
+const SYSTEM_ROLES = new Set([
+  "postgres",
+  "pg_database_owner",
+  "pg_read_all_data",
+  "pg_write_all_data",
+  "pg_monitor",
+  "pg_read_all_settings",
+  "pg_read_all_stats",
+  "pg_stat_scan_tables",
+  "pg_read_server_files",
+  "pg_write_server_files",
+  "pg_execute_server_program",
+  "pg_signal_backend",
+  "pg_checkpoint",
+  "pg_use_reserved_connections",
+  "pg_create_subscription",
+]);
+
+export interface DbRole {
+  rolname: string;
+  rolcanlogin: boolean;
+  rolsuper: boolean;
+  rolcreatedb: boolean;
+  rolcreaterole: boolean;
+  rolinherit: boolean;
+  rolconnlimit: number;
+}
+
+/** Get all user-defined roles (excludes system roles) */
+export async function getExistingRoles(client: pg.PoolClient): Promise<RoleSchema[]> {
+  const res = await client.query<DbRole>(
+    `SELECT rolname, rolcanlogin, rolsuper, rolcreatedb, rolcreaterole, rolinherit, rolconnlimit
+     FROM pg_roles
+     WHERE rolname NOT LIKE 'pg_%'
+       AND rolname != 'postgres'
+     ORDER BY rolname`,
+  );
+
+  const roles: RoleSchema[] = [];
+  for (const row of res.rows) {
+    if (SYSTEM_ROLES.has(row.rolname)) continue;
+    const role: RoleSchema = {
+      role: row.rolname,
+      login: row.rolcanlogin,
+      superuser: row.rolsuper,
+      createdb: row.rolcreatedb,
+      createrole: row.rolcreaterole,
+      inherit: row.rolinherit,
+      connection_limit: row.rolconnlimit,
+    };
+
+    // Get memberships
+    const memberRes = await client.query(
+      `SELECT g.rolname AS group_name
+       FROM pg_auth_members m
+       JOIN pg_roles r ON r.oid = m.member
+       JOIN pg_roles g ON g.oid = m.roleid
+       WHERE r.rolname = $1
+       ORDER BY g.rolname`,
+      [row.rolname],
+    );
+    if (memberRes.rows.length > 0) {
+      role.in = memberRes.rows.map((r: { group_name: string }) => r.group_name);
+    }
+
+    roles.push(role);
+  }
+
+  return roles;
+}
+
+// ─── Grant Introspection ─────────────────────────────────────────────────────
+
+export interface DbTableGrant {
+  grantee: string;
+  privilege_type: string;
+  is_grantable: string;
+}
+
+export interface DbColumnGrant {
+  grantee: string;
+  privilege_type: string;
+  column_name: string;
+  is_grantable: string;
+}
+
+/** Get table-level grants for a specific table (excludes owner grants) */
+export async function getTableGrants(
+  client: pg.PoolClient,
+  tableName: string,
+  pgSchema: string,
+): Promise<DbTableGrant[]> {
+  const res = await client.query<DbTableGrant>(
+    `SELECT grantee, privilege_type, is_grantable
+     FROM information_schema.role_table_grants
+     WHERE table_schema = $1 AND table_name = $2
+       AND grantor = grantee IS FALSE
+       AND grantee != 'postgres'
+       AND grantee NOT LIKE 'pg_%'
+     ORDER BY grantee, privilege_type`,
+    [pgSchema, tableName],
+  );
+  return res.rows;
+}
+
+/** Get column-level grants for a specific table */
+export async function getColumnGrants(
+  client: pg.PoolClient,
+  tableName: string,
+  pgSchema: string,
+): Promise<DbColumnGrant[]> {
+  const res = await client.query<DbColumnGrant>(
+    `SELECT grantee, privilege_type, column_name, is_grantable
+     FROM information_schema.column_privileges
+     WHERE table_schema = $1 AND table_name = $2
+       AND grantor = grantee IS FALSE
+       AND grantee != 'postgres'
+       AND grantee NOT LIKE 'pg_%'
+     ORDER BY grantee, column_name, privilege_type`,
+    [pgSchema, tableName],
+  );
+  return res.rows;
 }

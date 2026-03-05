@@ -17,6 +17,9 @@ import type {
   ViewSchema,
   MaterializedViewSchema,
   UniqueConstraintDef,
+  RoleSchema,
+  GrantDef,
+  GrantPrivilege,
 } from "./types.js";
 import { logger } from "../core/logger.js";
 
@@ -202,6 +205,10 @@ export function parseTableFile(filePath: string): TableSchema {
     schema.policies = raw.policies.map((p: Record<string, unknown>) => parsePolicyDef(p, filePath));
   }
 
+  if (raw.grants && Array.isArray(raw.grants)) {
+    schema.grants = raw.grants.map((g: Record<string, unknown>) => parseGrantDef(g, filePath));
+  }
+
   if (raw.comment !== undefined) {
     schema.comment = String(raw.comment);
   }
@@ -264,6 +271,10 @@ export function parseMixinFile(filePath: string): MixinSchema {
 
   if (raw.policies && Array.isArray(raw.policies)) {
     schema.policies = raw.policies.map((p: Record<string, unknown>) => parsePolicyDef(p, filePath));
+  }
+
+  if (raw.grants && Array.isArray(raw.grants)) {
+    schema.grants = raw.grants.map((g: Record<string, unknown>) => parseGrantDef(g, filePath));
   }
 
   logger.debug(`Parsed mixin: ${schema.mixin}`);
@@ -383,4 +394,73 @@ export function parseFunctionFile(filePath: string): FunctionSchema {
   if (raw.comment) fn.comment = String(raw.comment);
 
   return fn;
+}
+
+const VALID_GRANT_PRIVILEGES = ["SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER", "ALL"];
+
+/** Parse a single grant definition from raw YAML */
+export function parseGrantDef(grant: Record<string, unknown>, filePath: string): GrantDef {
+  if (!grant.to) {
+    throw new Error(`Each grant in ${filePath} must have "to" (role name or array)`);
+  }
+  if (!grant.privileges || !Array.isArray(grant.privileges) || grant.privileges.length === 0) {
+    throw new Error(`Each grant in ${filePath} must have "privileges" as a non-empty array`);
+  }
+
+  const privileges = (grant.privileges as string[]).map((p) => {
+    const upper = String(p).toUpperCase();
+    if (!VALID_GRANT_PRIVILEGES.includes(upper)) {
+      throw new Error(
+        `Grant in ${filePath} has invalid privilege "${p}". Must be one of: ${VALID_GRANT_PRIVILEGES.join(", ")}`,
+      );
+    }
+    return upper as GrantPrivilege;
+  });
+
+  let to: string | string[];
+  if (Array.isArray(grant.to)) {
+    to = grant.to.map(String);
+  } else {
+    to = String(grant.to);
+  }
+
+  const def: GrantDef = { to, privileges };
+
+  if (grant.columns && Array.isArray(grant.columns)) {
+    def.columns = grant.columns.map(String);
+  }
+
+  if (grant.with_grant_option !== undefined) {
+    def.with_grant_option = Boolean(grant.with_grant_option);
+  }
+
+  return def;
+}
+
+export function parseRoleFile(filePath: string): RoleSchema {
+  const content = readFileSync(filePath, "utf-8");
+  const raw = parseYaml(content);
+
+  if (!raw || typeof raw !== "object" || !raw.role) {
+    throw new Error(`Invalid role file: ${filePath} — expected "role" key`);
+  }
+
+  const role: RoleSchema = {
+    role: String(raw.role),
+  };
+
+  if (raw.login !== undefined) role.login = Boolean(raw.login);
+  if (raw.superuser !== undefined) role.superuser = Boolean(raw.superuser);
+  if (raw.createdb !== undefined) role.createdb = Boolean(raw.createdb);
+  if (raw.createrole !== undefined) role.createrole = Boolean(raw.createrole);
+  if (raw.inherit !== undefined) role.inherit = Boolean(raw.inherit);
+  if (raw.connection_limit !== undefined) role.connection_limit = Number(raw.connection_limit);
+
+  if (raw.in && Array.isArray(raw.in)) {
+    role.in = raw.in.map(String);
+  }
+
+  if (raw.comment) role.comment = String(raw.comment);
+
+  return role;
 }

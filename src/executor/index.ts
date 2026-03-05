@@ -15,6 +15,7 @@ import {
   parseExtensionsFile,
   parseViewFile,
   parseMaterializedViewFile,
+  parseRoleFile,
 } from "../schema/parser.js";
 import { loadMixins, expandMixins } from "../schema/mixins.js";
 import type {
@@ -24,6 +25,7 @@ import type {
   ExtensionsSchema,
   ViewSchema,
   MaterializedViewSchema,
+  RoleSchema,
 } from "../schema/types.js";
 import { FileTracker } from "../core/tracker.js";
 import { withClient, retryOnTimeout, type ClientOptions } from "../core/db.js";
@@ -225,6 +227,7 @@ export async function runMigrate(config: SchemaFlowConfig): Promise<ExecutionRes
         const extensionFiles: string[] = [];
         const viewFiles: string[] = [];
         const mvFiles: string[] = [];
+        const roleFiles: string[] = [];
 
         for (const f of schemaFiles) {
           const base = path.basename(f);
@@ -233,6 +236,7 @@ export async function runMigrate(config: SchemaFlowConfig): Promise<ExecutionRes
           else if (base === "extensions.yaml" || base === "extensions.yml") extensionFiles.push(f);
           else if (base.startsWith("view_")) viewFiles.push(f);
           else if (base.startsWith("mv_")) mvFiles.push(f);
+          else if (base.startsWith("role_")) roleFiles.push(f);
           else tableFiles.push(f);
         }
 
@@ -375,6 +379,18 @@ export async function runMigrate(config: SchemaFlowConfig): Promise<ExecutionRes
           }
         }
 
+        // Parse role files
+        const parsedRoles: RoleSchema[] = [];
+        for (const f of roleFiles) {
+          try {
+            parsedRoles.push(parseRoleFile(f));
+          } catch (err) {
+            const msg = `Failed to parse role ${f}: ${err instanceof Error ? err.message : String(err)}`;
+            errors.push(msg);
+            logger.error(msg);
+          }
+        }
+
         if (errors.length > 0) {
           return {
             phase: "migrate",
@@ -416,6 +432,7 @@ export async function runMigrate(config: SchemaFlowConfig): Promise<ExecutionRes
         if (parsedExtensions) planOptions.extensions = parsedExtensions;
         if (parsedViews.length > 0) planOptions.views = parsedViews;
         if (parsedMvs.length > 0) planOptions.materializedViews = parsedMvs;
+        if (parsedRoles.length > 0) planOptions.roles = parsedRoles;
 
         const plan = await buildPlan(client, expandedSchemas, config.pgSchema, planOptions);
 
@@ -749,8 +766,14 @@ export async function runValidate(config: SchemaFlowConfig): Promise<ValidationR
   }
 
   // Separate function files from table files
+  const NON_TABLE_PREFIXES = ["fn_", "enum_", "view_", "mv_", "role_"];
   const functionFiles = schemaFiles.filter((f) => path.basename(f).startsWith("fn_"));
-  const tableFiles = schemaFiles.filter((f) => !path.basename(f).startsWith("fn_"));
+  const tableFiles = schemaFiles.filter((f) => {
+    const base = path.basename(f);
+    return (
+      !NON_TABLE_PREFIXES.some((p) => base.startsWith(p)) && base !== "extensions.yaml" && base !== "extensions.yml"
+    );
+  });
 
   // Parse function files
   const parsedFunctions: FunctionSchema[] = [];

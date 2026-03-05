@@ -241,6 +241,57 @@ function reverseOperation(op: Operation, snapshot: MigrationSnapshot, pgSchema: 
       };
     }
 
+    case "create_role": {
+      const roleMatch = op.sql.match(/CREATE ROLE "([^"]+)"/);
+      const roleName = roleMatch?.[1] || "unknown";
+      return {
+        sql: `DROP ROLE IF EXISTS "${roleName}";`,
+        description: `Drop role ${roleName} (reverse of create)`,
+        destructive: true,
+        safe: false,
+        irreversible: false,
+      };
+    }
+
+    case "alter_role":
+      return null; // Cannot generically reverse without snapshot
+
+    case "grant_membership": {
+      const grantMatch = op.sql.match(/GRANT "([^"]+)" TO "([^"]+)"/);
+      if (grantMatch) {
+        return {
+          sql: `REVOKE "${grantMatch[1]}" FROM "${grantMatch[2]}";`,
+          description: `Revoke role ${grantMatch[1]} from ${grantMatch[2]} (reverse of grant)`,
+          destructive: false,
+          safe: true,
+          irreversible: false,
+        };
+      }
+      return null;
+    }
+
+    case "grant_table":
+    case "grant_column": {
+      const grantSql = op.sql.replace(/^GRANT\b/, "REVOKE").replace(/\bTO\b/, "FROM");
+      return {
+        sql: grantSql,
+        description: `Revoke (reverse of ${op.description})`,
+        destructive: false,
+        safe: true,
+        irreversible: false,
+      };
+    }
+
+    case "revoke_table":
+    case "revoke_column":
+      return {
+        sql: `-- IRREVERSIBLE: ${op.description} — privilege was revoked`,
+        description: `${op.description} — IRREVERSIBLE`,
+        destructive: false,
+        safe: false,
+        irreversible: true,
+      };
+
     // Destructive ops are irreversible (data gone)
     case "drop_column":
     case "drop_table":

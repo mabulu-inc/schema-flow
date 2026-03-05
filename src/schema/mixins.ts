@@ -4,7 +4,16 @@
 import { existsSync } from "node:fs";
 import { glob } from "glob";
 import path from "node:path";
-import type { TableSchema, MixinSchema, ColumnDef, IndexDef, CheckDef, TriggerDef, PolicyDef } from "./types.js";
+import type {
+  TableSchema,
+  MixinSchema,
+  ColumnDef,
+  IndexDef,
+  CheckDef,
+  TriggerDef,
+  PolicyDef,
+  GrantDef,
+} from "./types.js";
 import { parseMixinFile } from "./parser.js";
 import { logger } from "../core/logger.js";
 
@@ -63,6 +72,7 @@ export function expandMixins(schemas: TableSchema[], mixinMap: Map<string, Mixin
     const mixinChecks: CheckDef[] = [];
     const mixinTriggers: TriggerDef[] = [];
     const mixinPolicies: PolicyDef[] = [];
+    const mixinGrants: GrantDef[] = [];
     let mixinRls = false;
     let mixinForceRls = false;
 
@@ -111,6 +121,9 @@ export function expandMixins(schemas: TableSchema[], mixinMap: Map<string, Mixin
           });
         }
       }
+      if (mixin.grants) {
+        mixinGrants.push(...mixin.grants);
+      }
       if (mixin.rls) {
         mixinRls = true;
       }
@@ -136,6 +149,9 @@ export function expandMixins(schemas: TableSchema[], mixinMap: Map<string, Mixin
     const mergedPolicies =
       mixinPolicies.length > 0 || schema.policies ? [...mixinPolicies, ...(schema.policies || [])] : undefined;
 
+    const mergedGrants =
+      mixinGrants.length > 0 || schema.grants ? [...mixinGrants, ...(schema.grants || [])] : undefined;
+
     const { use: _, ...rest } = schema;
 
     // RLS flags: table can override mixin, but mixin sets the default
@@ -151,6 +167,7 @@ export function expandMixins(schemas: TableSchema[], mixinMap: Map<string, Mixin
       ...(mergedRls !== undefined ? { rls: mergedRls } : {}),
       ...(mergedForceRls !== undefined ? { force_rls: mergedForceRls } : {}),
       policies: mergedPolicies,
+      grants: mergedGrants,
     };
   });
 }

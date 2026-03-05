@@ -488,7 +488,15 @@ async function main(): Promise<void> {
         const pathMod = await import("node:path");
         const { discoverSchemaFiles: discoverFiles } = await import("../core/files.js");
         const schemaFilesForLint = await discoverFiles(config.schemaDir);
-        const tableFilesForLint = schemaFilesForLint.filter((f) => !pathMod.default.basename(f).startsWith("fn_"));
+        const NON_TABLE_PREFIXES_LINT = ["fn_", "enum_", "view_", "mv_", "role_"];
+        const tableFilesForLint = schemaFilesForLint.filter((f) => {
+          const base = pathMod.default.basename(f);
+          return (
+            !NON_TABLE_PREFIXES_LINT.some((p) => base.startsWith(p)) &&
+            base !== "extensions.yaml" &&
+            base !== "extensions.yml"
+          );
+        });
 
         // Parse and expand
         const { parseTableFile: ptf } = await import("../schema/parser.js");
@@ -538,7 +546,15 @@ async function main(): Promise<void> {
         const { discoverSchemaFiles: discoverSql } = await import("../core/files.js");
         const sqlSchemaFiles = await discoverSql(config.schemaDir);
         const sqlFunctionFiles = sqlSchemaFiles.filter((f) => pathModSql.default.basename(f).startsWith("fn_"));
-        const sqlTableFiles = sqlSchemaFiles.filter((f) => !pathModSql.default.basename(f).startsWith("fn_"));
+        const NON_TABLE_PREFIXES_SQL = ["fn_", "enum_", "view_", "mv_", "role_"];
+        const sqlTableFiles = sqlSchemaFiles.filter((f) => {
+          const base = pathModSql.default.basename(f);
+          return (
+            !NON_TABLE_PREFIXES_SQL.some((p) => base.startsWith(p)) &&
+            base !== "extensions.yaml" &&
+            base !== "extensions.yml"
+          );
+        });
 
         const { parseTableFile: ptfSql, parseFunctionFile: pffSql } = await import("../schema/parser.js");
         const { loadMixins: lmSql, expandMixins: emSql } = await import("../schema/mixins.js");

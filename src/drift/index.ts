@@ -18,6 +18,7 @@ import {
   parseExtensionsFile,
   parseViewFile,
   parseMaterializedViewFile,
+  parseRoleFile,
 } from "../schema/parser.js";
 import { loadMixins, expandMixins } from "../schema/mixins.js";
 import { discoverSchemaFiles } from "../core/files.js";
@@ -31,6 +32,9 @@ import {
   getExistingExtensions,
   getExistingViews,
   getExistingMaterializedViews,
+  getExistingRoles,
+  getTableGrants as introspectTableGrants,
+  getColumnGrants as introspectColumnGrants,
   getTableIndexes,
   getTableConstraints,
   parseIndexDefFull,
@@ -62,7 +66,9 @@ export interface DriftItem {
     | "extension"
     | "view"
     | "materialized_view"
-    | "comment";
+    | "comment"
+    | "role"
+    | "grant";
   direction: "extra_in_db" | "missing_from_db" | "mismatch";
   table?: string;
   name: string;
@@ -94,6 +100,7 @@ export async function detectDrift(config: SchemaFlowConfig): Promise<DriftReport
   const extensionFiles: string[] = [];
   const viewFiles: string[] = [];
   const mvFiles: string[] = [];
+  const roleFiles: string[] = [];
 
   for (const f of schemaFiles) {
     const base = path.basename(f);
@@ -102,6 +109,7 @@ export async function detectDrift(config: SchemaFlowConfig): Promise<DriftReport
     else if (base === "extensions.yaml" || base === "extensions.yml") extensionFiles.push(f);
     else if (base.startsWith("view_")) viewFiles.push(f);
     else if (base.startsWith("mv_")) mvFiles.push(f);
+    else if (base.startsWith("role_")) roleFiles.push(f);
     else tableFiles.push(f);
   }
 
@@ -576,6 +584,94 @@ export async function detectDrift(config: SchemaFlowConfig): Promise<DriftReport
           name: existing.name,
           description: `Materialized view "${existing.name}" exists in database but has no schema file`,
         });
+      }
+    }
+
+    // ─── Role drift ────────────────────────────────────────────────────────
+    const parsedRoles = roleFiles.map((f) => parseRoleFile(f));
+    const existingRoles = await getExistingRoles(client);
+    const existingRoleMap = new Map(existingRoles.map((r) => [r.role, r]));
+
+    for (const desired of parsedRoles) {
+      const existing = existingRoleMap.get(desired.role);
+      if (!existing) {
+        items.push({
+          category: "role",
+          direction: "missing_from_db",
+          name: desired.role,
+          description: `Role "${desired.role}" defined in YAML but does not exist in database`,
+        });
+      } else {
+        const details: { field: string; expected: string; actual: string }[] = [];
+        const desiredLogin = desired.login ?? false;
+        const desiredCreatedb = desired.createdb ?? false;
+        const desiredCreaterole = desired.createrole ?? false;
+        const desiredInherit = desired.inherit ?? true;
+        if (desiredLogin !== existing.login)
+          details.push({ field: "login", expected: String(desiredLogin), actual: String(existing.login) });
+        if (desiredCreatedb !== existing.createdb)
+          details.push({ field: "createdb", expected: String(desiredCreatedb), actual: String(existing.createdb) });
+        if (desiredCreaterole !== existing.createrole)
+          details.push({
+            field: "createrole",
+            expected: String(desiredCreaterole),
+            actual: String(existing.createrole),
+          });
+        if (desiredInherit !== existing.inherit)
+          details.push({ field: "inherit", expected: String(desiredInherit), actual: String(existing.inherit) });
+        if (details.length > 0) {
+          items.push({
+            category: "role",
+            direction: "mismatch",
+            name: desired.role,
+            description: `Role "${desired.role}" attributes differ`,
+            details,
+          });
+        }
+      }
+    }
+
+    // ─── Grant drift ───────────────────────────────────────────────────────
+    for (const schema of expandedSchemas) {
+      if (!schema.grants || schema.grants.length === 0) continue;
+      const existingTableGrantRows = await introspectTableGrants(client, schema.table, config.pgSchema);
+      const existingColGrantRows = await introspectColumnGrants(client, schema.table, config.pgSchema);
+
+      for (const grant of schema.grants) {
+        const roles = Array.isArray(grant.to) ? grant.to : [grant.to];
+        for (const role of roles) {
+          if (grant.columns) {
+            for (const col of grant.columns) {
+              for (const priv of grant.privileges) {
+                const found = existingColGrantRows.some(
+                  (g) => g.grantee === role && g.column_name === col && g.privilege_type === priv,
+                );
+                if (!found) {
+                  items.push({
+                    category: "grant",
+                    direction: "missing_from_db",
+                    table: schema.table,
+                    name: `${priv} (${col}) → ${role}`,
+                    description: `GRANT ${priv} (${col}) ON ${schema.table} TO ${role} missing from database`,
+                  });
+                }
+              }
+            }
+          } else {
+            for (const priv of grant.privileges) {
+              const found = existingTableGrantRows.some((g) => g.grantee === role && g.privilege_type === priv);
+              if (!found) {
+                items.push({
+                  category: "grant",
+                  direction: "missing_from_db",
+                  table: schema.table,
+                  name: `${priv} → ${role}`,
+                  description: `GRANT ${priv} ON ${schema.table} TO ${role} missing from database`,
+                });
+              }
+            }
+          }
+        }
       }
     }
   });

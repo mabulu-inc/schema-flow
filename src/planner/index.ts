@@ -15,6 +15,8 @@ import type {
   ViewSchema,
   MaterializedViewSchema,
   UniqueConstraintDef,
+  RoleSchema,
+  GrantDef,
 } from "../schema/types.js";
 import {
   introspectTable,
@@ -35,6 +37,9 @@ import {
   getTriggerComments,
   getConstraintComments,
   getPolicyComments,
+  getExistingRoles,
+  getTableGrants as introspectTableGrants,
+  getColumnGrants as introspectColumnGrants,
   type ParsedIndex,
 } from "../introspect/index.js";
 import { logger } from "../core/logger.js";
@@ -76,7 +81,14 @@ export type OperationType =
   | "create_materialized_view"
   | "drop_materialized_view"
   | "refresh_materialized_view"
-  | "set_comment";
+  | "set_comment"
+  | "create_role"
+  | "alter_role"
+  | "grant_membership"
+  | "grant_table"
+  | "grant_column"
+  | "revoke_table"
+  | "revoke_column";
 
 export interface Operation {
   type: OperationType;
@@ -123,6 +135,8 @@ export interface PlanOptions {
   views?: ViewSchema[];
   /** Desired materialized views */
   materializedViews?: MaterializedViewSchema[];
+  /** Desired roles */
+  roles?: RoleSchema[];
 }
 
 export async function buildPlan(
@@ -135,6 +149,12 @@ export async function buildPlan(
   const existingTables = new Set(await getExistingTables(client, pgSchema));
   const desiredTableNames = new Set(desiredSchemas.map((s) => s.table));
   const allOps: Operation[] = [];
+
+  // Plan roles first (must exist before grants reference them)
+  if (options.roles) {
+    const roleOps = await planRoles(client, options.roles);
+    allOps.push(...roleOps);
+  }
 
   // Plan extensions (execute first)
   if (options.extensions) {
@@ -157,6 +177,14 @@ export async function buildPlan(
       // ALTER TABLE — diff columns, indexes, checks
       const alterOps = await planAlterTable(client, desired, pgSchema);
       allOps.push(...alterOps);
+    }
+  }
+
+  // Plan grants (after tables are created/altered, roles exist)
+  for (const desired of desiredSchemas) {
+    if (desired.grants && desired.grants.length > 0) {
+      const grantOps = await planGrantDiff(client, desired.table, desired.grants, pgSchema);
+      allOps.push(...grantOps);
     }
   }
 
@@ -215,16 +243,27 @@ export async function buildPlan(
   // enable_rls and create_policy ops. This prevents failures when a policy
   // on table B references table A via subquery and B is planned first.
   const rawStructureOps = allowed.filter((op) => op.phase === "structure");
+  const isRoleRelated = (o: Operation) =>
+    o.type === "create_role" || o.type === "alter_role" || o.type === "grant_membership";
   const isPolicyRelated = (o: Operation) =>
     o.type === "enable_rls" ||
     o.type === "create_policy" ||
     (o.type === "set_comment" && o.sql.includes("COMMENT ON POLICY"));
+  const isGrantRelated = (o: Operation) =>
+    o.type === "grant_table" || o.type === "grant_column" || o.type === "revoke_table" || o.type === "revoke_column";
   const structureOps = [
-    ...rawStructureOps.filter((o) => !isPolicyRelated(o)),
+    // Roles first (before tables, so grants can reference them)
+    ...rawStructureOps.filter((o) => isRoleRelated(o)),
+    // Normal structure ops (create_table, add_column, etc.)
+    ...rawStructureOps.filter((o) => !isRoleRelated(o) && !isPolicyRelated(o) && !isGrantRelated(o)),
+    // Enable RLS
     ...rawStructureOps.filter((o) => o.type === "enable_rls"),
+    // Create policies
     ...rawStructureOps.filter(
       (o) => o.type === "create_policy" || (o.type === "set_comment" && o.sql.includes("COMMENT ON POLICY")),
     ),
+    // Grants last (tables and roles must exist)
+    ...rawStructureOps.filter((o) => isGrantRelated(o)),
   ];
   const foreignKeyOps = allowed.filter((op) => op.phase === "foreign_key");
   const validateOps = allowed.filter((op) => op.phase === "validate");
@@ -1650,4 +1689,229 @@ function isExpression(col: string): boolean {
 /** Format columns for CREATE INDEX, quoting identifiers but not expressions */
 function formatIndexColumns(columns: string[]): string {
   return columns.map((c) => (isExpression(c) ? c : `"${c}"`)).join(", ");
+}
+
+// ─── Role Planning ───────────────────────────────────────────────────────────
+
+async function planRoles(client: pg.PoolClient, desiredRoles: RoleSchema[]): Promise<Operation[]> {
+  const ops: Operation[] = [];
+  const existingRoles = await getExistingRoles(client);
+  const existingMap = new Map(existingRoles.map((r) => [r.role, r]));
+
+  // Sort: roles without memberships first, then roles with memberships
+  const sorted = [...desiredRoles].sort((a, b) => {
+    const aHasDeps = (a.in?.length || 0) > 0 ? 1 : 0;
+    const bHasDeps = (b.in?.length || 0) > 0 ? 1 : 0;
+    return aHasDeps - bHasDeps;
+  });
+
+  for (const desired of sorted) {
+    const existing = existingMap.get(desired.role);
+    if (!existing) {
+      // Create role
+      const attrs = buildRoleAttributes(desired);
+      ops.push({
+        type: "create_role",
+        sql: `CREATE ROLE "${desired.role}"${attrs};`,
+        description: `Create role ${desired.role}`,
+        phase: "structure",
+        destructive: false,
+      });
+    } else {
+      // Diff attributes
+      const alterClauses = diffRoleAttributes(desired, existing);
+      if (alterClauses.length > 0) {
+        ops.push({
+          type: "alter_role",
+          sql: `ALTER ROLE "${desired.role}" ${alterClauses.join(" ")};`,
+          description: `Alter role ${desired.role}: ${alterClauses.join(", ")}`,
+          phase: "structure",
+          destructive: false,
+        });
+      }
+    }
+
+    // Memberships
+    if (desired.in) {
+      const existingMemberships = new Set(existing?.in || []);
+      for (const group of desired.in) {
+        if (!existingMemberships.has(group)) {
+          ops.push({
+            type: "grant_membership",
+            sql: `GRANT "${group}" TO "${desired.role}";`,
+            description: `Grant role ${group} to ${desired.role}`,
+            phase: "structure",
+            destructive: false,
+          });
+        }
+      }
+    }
+  }
+
+  return ops;
+}
+
+function buildRoleAttributes(role: RoleSchema): string {
+  const parts: string[] = [];
+  if (role.login === true) parts.push("LOGIN");
+  else if (role.login === false) parts.push("NOLOGIN");
+  if (role.superuser === true) parts.push("SUPERUSER");
+  else if (role.superuser === false) parts.push("NOSUPERUSER");
+  if (role.createdb === true) parts.push("CREATEDB");
+  else if (role.createdb === false) parts.push("NOCREATEDB");
+  if (role.createrole === true) parts.push("CREATEROLE");
+  else if (role.createrole === false) parts.push("NOCREATEROLE");
+  if (role.inherit === false) parts.push("NOINHERIT");
+  else if (role.inherit === true) parts.push("INHERIT");
+  if (role.connection_limit !== undefined && role.connection_limit >= 0) {
+    parts.push(`CONNECTION LIMIT ${role.connection_limit}`);
+  }
+  return parts.length > 0 ? ` ${parts.join(" ")}` : "";
+}
+
+function diffRoleAttributes(desired: RoleSchema, existing: RoleSchema): string[] {
+  const clauses: string[] = [];
+  const desiredLogin = desired.login ?? false;
+  const desiredSuperuser = desired.superuser ?? false;
+  const desiredCreatedb = desired.createdb ?? false;
+  const desiredCreaterole = desired.createrole ?? false;
+  const desiredInherit = desired.inherit ?? true;
+
+  if (desiredLogin !== existing.login) clauses.push(desiredLogin ? "LOGIN" : "NOLOGIN");
+  if (desiredSuperuser !== existing.superuser) clauses.push(desiredSuperuser ? "SUPERUSER" : "NOSUPERUSER");
+  if (desiredCreatedb !== existing.createdb) clauses.push(desiredCreatedb ? "CREATEDB" : "NOCREATEDB");
+  if (desiredCreaterole !== existing.createrole) clauses.push(desiredCreaterole ? "CREATEROLE" : "NOCREATEROLE");
+  if (desiredInherit !== existing.inherit) clauses.push(desiredInherit ? "INHERIT" : "NOINHERIT");
+
+  if (desired.connection_limit !== undefined && desired.connection_limit !== existing.connection_limit) {
+    clauses.push(`CONNECTION LIMIT ${desired.connection_limit}`);
+  }
+
+  return clauses;
+}
+
+// ─── Grant Planning ──────────────────────────────────────────────────────────
+
+async function planGrantDiff(
+  client: pg.PoolClient,
+  tableName: string,
+  desiredGrants: GrantDef[],
+  pgSchema: string,
+): Promise<Operation[]> {
+  const ops: Operation[] = [];
+
+  // Introspect existing grants
+  const existingTableGrants = await introspectTableGrants(client, tableName, pgSchema);
+  const existingColGrants = await introspectColumnGrants(client, tableName, pgSchema);
+
+  // Build maps: role → Set<privilege> for table-level
+  const existingTableMap = new Map<string, Set<string>>();
+  for (const g of existingTableGrants) {
+    if (!existingTableMap.has(g.grantee)) existingTableMap.set(g.grantee, new Set());
+    existingTableMap.get(g.grantee)!.add(g.privilege_type);
+  }
+
+  // Build maps: role → Map<column, Set<privilege>> for column-level
+  const existingColMap = new Map<string, Map<string, Set<string>>>();
+  for (const g of existingColGrants) {
+    if (!existingColMap.has(g.grantee)) existingColMap.set(g.grantee, new Map());
+    const roleMap = existingColMap.get(g.grantee)!;
+    if (!roleMap.has(g.column_name)) roleMap.set(g.column_name, new Set());
+    roleMap.get(g.column_name)!.add(g.privilege_type);
+  }
+
+  // Track which role+privilege combos are desired (for revoke detection)
+  const desiredTablePrivs = new Map<string, Set<string>>();
+  const desiredColPrivs = new Map<string, Map<string, Set<string>>>();
+
+  for (const grant of desiredGrants) {
+    const roles = Array.isArray(grant.to) ? grant.to : [grant.to];
+
+    for (const role of roles) {
+      if (grant.columns) {
+        // Column-level grant
+        if (!desiredColPrivs.has(role)) desiredColPrivs.set(role, new Map());
+        const roleColMap = desiredColPrivs.get(role)!;
+
+        for (const col of grant.columns) {
+          if (!roleColMap.has(col)) roleColMap.set(col, new Set());
+          for (const priv of grant.privileges) {
+            roleColMap.get(col)!.add(priv);
+          }
+        }
+
+        // Check what we need to grant
+        const existingRoleColMap = existingColMap.get(role);
+        for (const col of grant.columns) {
+          for (const priv of grant.privileges) {
+            const existingPrivs = existingRoleColMap?.get(col);
+            if (!existingPrivs?.has(priv)) {
+              // Need to grant — batch by privilege
+              ops.push({
+                type: "grant_column",
+                table: tableName,
+                sql: `GRANT ${priv} ("${col}") ON "${pgSchema}"."${tableName}" TO "${role}";`,
+                description: `Grant ${priv} on ${tableName}(${col}) to ${role}`,
+                phase: "structure",
+                destructive: false,
+              });
+            }
+          }
+        }
+      } else {
+        // Table-level grant
+        if (!desiredTablePrivs.has(role)) desiredTablePrivs.set(role, new Set());
+        for (const priv of grant.privileges) {
+          desiredTablePrivs.get(role)!.add(priv);
+        }
+
+        const existingPrivs = existingTableMap.get(role);
+        for (const priv of grant.privileges) {
+          if (!existingPrivs?.has(priv)) {
+            ops.push({
+              type: "grant_table",
+              table: tableName,
+              sql: `GRANT ${priv} ON "${pgSchema}"."${tableName}" TO "${role}";`,
+              description: `Grant ${priv} on ${tableName} to ${role}`,
+              phase: "structure",
+              destructive: false,
+            });
+          }
+        }
+      }
+    }
+  }
+
+  // Revoke table-level privileges that exist but are not desired
+  for (const [role, existingPrivs] of existingTableMap) {
+    const desired = desiredTablePrivs.get(role);
+    if (!desired) {
+      // All table privs for this role should be revoked
+      for (const priv of existingPrivs) {
+        ops.push({
+          type: "revoke_table",
+          table: tableName,
+          sql: `REVOKE ${priv} ON "${pgSchema}"."${tableName}" FROM "${role}";`,
+          description: `Revoke ${priv} on ${tableName} from ${role}`,
+          phase: "structure",
+          destructive: true,
+        });
+      }
+    } else {
+      for (const priv of existingPrivs) {
+        if (!desired.has(priv)) {
+          ops.push({
+            type: "revoke_table",
+            table: tableName,
+            sql: `REVOKE ${priv} ON "${pgSchema}"."${tableName}" FROM "${role}";`,
+            description: `Revoke ${priv} on ${tableName} from ${role}`,
+            phase: "structure",
+            destructive: true,
+          });
+        }
+      }
+    }
+  }
+
+  return ops;
 }

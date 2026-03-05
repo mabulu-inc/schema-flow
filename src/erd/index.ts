@@ -74,8 +74,14 @@ export async function generateErdFromFiles(
 ): Promise<string> {
   const schemaFiles = await discoverSchemaFiles(schemaDir);
 
-  // Filter out function files
-  const tableFiles = schemaFiles.filter((f) => !path.basename(f).startsWith("fn_"));
+  // Filter out non-table files
+  const NON_TABLE_PREFIXES = ["fn_", "enum_", "view_", "mv_", "role_"];
+  const tableFiles = schemaFiles.filter((f) => {
+    const base = path.basename(f);
+    return (
+      !NON_TABLE_PREFIXES.some((p) => base.startsWith(p)) && base !== "extensions.yaml" && base !== "extensions.yml"
+    );
+  });
 
   const schemas = tableFiles.map((f) => parseTableFile(f));
 
