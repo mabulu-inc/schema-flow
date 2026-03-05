@@ -1,0 +1,40 @@
+# CLAUDE.md — schema-flow project instructions
+
+<!-- Copy this file to your project root as CLAUDE.md so AI assistants understand your schema-flow setup. -->
+
+## Database Schema Management
+
+This project uses **schema-flow** for declarative PostgreSQL schema management.
+
+- Schema definitions: `schema/tables/*.yaml`, `schema/enums/*.yaml`, `schema/functions/*.yaml`, `schema/views/*.yaml`, `schema/roles/*.yaml`
+- Pre-migration scripts: `schema/pre/*.sql`
+- Post-migration scripts: `schema/post/*.sql`
+- Reusable mixins: `schema/mixins/*.yaml`
+- Extensions: `schema/extensions.yaml`
+
+## Key Commands
+
+```bash
+npx @mabulu-inc/schema-flow plan          # preview what SQL would run
+npx @mabulu-inc/schema-flow run           # apply pre → migrate → post
+npx @mabulu-inc/schema-flow drift         # compare YAML vs live DB
+npx @mabulu-inc/schema-flow validate      # dry-run in a rolled-back transaction
+npx @mabulu-inc/schema-flow generate      # generate YAML from existing DB
+```
+
+## Rules for Schema Changes
+
+- **All structural changes go through YAML files.** Do not write raw ALTER TABLE statements. Add/modify the column in the table's YAML file and let schema-flow generate the SQL.
+- **Use pre/post scripts for data migrations.** Scaffold with `npx @mabulu-inc/schema-flow new pre <name>` or `new post <name>`.
+- **Columns are NOT NULL by default.** Set `nullable: true` explicitly if NULL is needed.
+- **Destructive operations require `--allow-destructive`.** Dropping columns, tables, or narrowing types won't run without the flag.
+- **Use mixins for shared patterns.** Common column sets (timestamps, soft_delete, tenant_id) belong in `schema/mixins/`.
+- **Run `plan` before `run`.** Always preview changes before applying.
+
+## YAML Reference
+
+See [docs/yaml-reference.md](https://github.com/mabulu-inc/schema-flow/blob/main/docs/yaml-reference.md) for the complete YAML specification.
+
+## Connection
+
+Set `DATABASE_URL` environment variable, or use `schema-flow.config.yaml` for environment-specific connections.

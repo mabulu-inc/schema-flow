@@ -1,0 +1,180 @@
+# @mabulu-inc/schema-flow
+
+> Declarative zero-downtime PostgreSQL migrations. Define the desired database state in YAML, and schema-flow figures out the diff.
+
+Run via `npx @mabulu-inc/schema-flow` — zero install, no Java, no Go, no Docker.
+
+## What It Does
+
+Schema-flow reads YAML table definitions and compares them against a live PostgreSQL database. It generates and executes the minimal set of DDL statements to bring the database to the desired state. Pre- and post-migration SQL scripts handle procedural work like data backfills, grants, and seed data.
+
+## Key Principles
+
+- Safe by default: only additive operations unless `--allow-destructive` is passed
+- Plan before apply: `plan` shows exactly what SQL would run without touching the database
+- Convention over configuration: drop files in `schema/tables/`, `schema/pre/`, `schema/post/`
+- SHA-256 hash tracking: only new or changed files are processed
+- Advisory locking prevents concurrent migrations
+- Lock timeout and statement timeout for safe DDL
+- Retry logic for transient database errors
+
+## Directory Structure
+
+After `schema-flow init`, the project expects:
+
+```
+schema/
+  tables/       YAML table definitions (one file per table)
+  enums/        Enum type definitions
+  functions/    Function definitions
+  views/        View and materialized view definitions
+  roles/        Role definitions
+  pre/          Pre-migration SQL scripts (run before schema changes)
+  post/         Post-migration SQL scripts (run after schema changes)
+  mixins/       Reusable schema mixins (timestamps, soft_delete, etc.)
+  repeatable/   SQL scripts re-run whenever their content changes
+```
+
+## CLI Commands
+
+- `init` — Create the `schema/` directory structure
+- `plan` — Dry run showing what would change
+- `run` — Execute all phases: pre, migrate, post
+- `run pre` — Run only pre-migration scripts
+- `run migrate` — Run only declarative schema migration
+- `run post` — Run only post-migration scripts
+- `validate` — Validate schema against a live database (transaction, always rolls back)
+- `drift` — Compare live database vs YAML and report differences
+- `lint` — Static analysis of migration plan for dangerous patterns
+- `sql` — Generate migration SQL file from plan
+- `erd` — Generate Mermaid ERD diagram
+- `down` — Show reverse migration plan (rollback)
+- `down --apply` — Execute reverse migration
+- `contract` — Drop columns previously marked for removal via expand/contract
+- `expand-status` — Show pending expand/contract column renames
+- `status` — Show migration history and current state
+- `baseline` — Mark current database state as the baseline (skip existing objects)
+- `generate` — Generate YAML from an existing database
+- `generate --seeds` — Generate seed YAML from existing table data
+- `new pre` / `new post` / `new mixin` — Scaffold new script files
+- `docs` — Print YAML format reference
+
+## Configuration
+
+Database connection is resolved in order:
+1. `--connection-string` CLI flag
+2. `DATABASE_URL` environment variable
+3. `schema-flow.config.yaml` in the project root
+
+## Supported Schema Objects
+
+- Tables and columns (all PostgreSQL types)
+- Primary keys, unique constraints, check constraints
+- Indexes (btree, gin, gist, hash, brin, partial, expression)
+- Foreign keys (including cross-schema references)
+- Enums (with safe value addition)
+- Functions and procedures
+- Views and materialized views
+- RLS policies
+- Roles and grants (GRANT on tables, schemas, functions)
+- Triggers
+- Generated columns (stored)
+- Column and table comments
+- Seeds (declarative row data)
+- Mixins for DRY schema definitions
+
+## YAML Table Definition
+
+A table YAML file supports these top-level keys:
+
+```yaml
+table: table_name
+use: [timestamps]             # optional, reference to schema/mixins/
+columns:
+  - name: id
+    type: serial
+    primary_key: true
+  - name: email
+    type: varchar(255)
+    unique: true
+    nullable: false            # default is false (NOT NULL)
+    default: "'unknown'"
+    references:
+      table: other_table
+      column: id
+      schema: other_schema     # optional, for cross-schema FKs
+      on_delete: CASCADE
+      on_update: CASCADE
+    comment: "User email address"
+indexes:
+  - columns: [email]
+    unique: true
+  - columns: ["lower(email)"]
+    name: idx_users_email_lower
+checks:
+  - name: chk_email
+    expression: "length(email) > 0"
+rls: true
+force_rls: true
+policies:
+  - name: user_isolation
+    for: ALL
+    using: "(user_id = current_setting('app.user_id')::int)"
+triggers:
+  - name: audit_trigger
+    timing: AFTER
+    events: [INSERT, UPDATE]
+    function: audit_fn
+    for_each: ROW
+seeds:
+  - id: 1
+    email: "admin@example.com"
+grants:
+  - to: readonly_role
+    privileges: [SELECT]
+```
+
+## Expand/Contract Pattern
+
+For zero-downtime column renames:
+
+```yaml
+columns:
+  - name: new_email
+    type: varchar(255)
+    expand:
+      from: email
+      transform: "lower(email)"
+      reverse: "email"
+```
+
+Run `schema-flow run` to expand (add new column, dual-write trigger, backfill). Later run `schema-flow contract` to drop the old column.
+
+## Detailed Documentation
+
+- [README.md](README.md) — Full documentation with examples and all YAML options
+- [docs/yaml-reference.md](docs/yaml-reference.md) — Complete YAML schema specification
+- [docs/switching-from-imperative.md](docs/switching-from-imperative.md) — Migrating from Knex, Flyway, Liquibase, dbmate
+- [docs/switching-from-orms.md](docs/switching-from-orms.md) — Migrating from Prisma, TypeORM, Sequelize, Django, Rails
+- [CONTRIBUTING.md](CONTRIBUTING.md) — Development setup and contribution guidelines
+- [examples/](examples/) — Example projects (todo-app, CMS, multi-schema, multi-tenant)
+
+## Source Code
+
+- [src/cli/](src/cli/) — CLI command handlers
+- [src/planner/](src/planner/) — Migration plan generation (diff engine)
+- [src/introspect/](src/introspect/) — Live database introspection
+- [src/executor/](src/executor/) — SQL execution with advisory locking
+- [src/schema/](src/schema/) — YAML parsing and validation
+- [src/drift/](src/drift/) — Drift detection (YAML vs live DB)
+- [src/rollback/](src/rollback/) — Reverse migration generation
+- [src/erd/](src/erd/) — Mermaid ERD diagram generation
+- [src/expand/](src/expand/) — Expand/contract column rename logic
+- [src/scaffold/](src/scaffold/) — `init` and `new` command scaffolding
+- [src/lint/](src/lint/) — Static analysis rules
+- [src/sql/](src/sql/) — SQL file generation
+
+## GitHub
+
+- Repository: https://github.com/mabulu-inc/schema-flow
+- Package: https://github.com/mabulu-inc/schema-flow/pkgs/npm/%40mabulu-inc/schema-flow

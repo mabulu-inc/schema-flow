@@ -1542,6 +1542,21 @@ npx vitest run examples/
 
 See the [examples README](examples/README.md) for details.
 
+## Switching to schema-flow
+
+Already using another migration tool? We have guides:
+
+- [**Switching from imperative tools**](docs/switching-from-imperative.md) — Knex, Flyway, Liquibase, golang-migrate, dbmate, raw SQL files
+- [**Switching from ORM migrations**](docs/switching-from-orms.md) — Prisma, TypeORM, Sequelize, Django, Rails, SQLAlchemy/Alembic
+
+TL;DR: `schema-flow generate` reads your existing DB and produces YAML. `schema-flow baseline` marks it as applied. Start writing YAML from there.
+
+## Documentation
+
+- [YAML Reference](docs/yaml-reference.md) — Complete specification of every YAML key
+- [AI Integration](docs/CLAUDE.md.template) — CLAUDE.md template for your project
+- [docs/](docs/) — All documentation
+
 ## License
 
 MIT — see [LICENSE](LICENSE).

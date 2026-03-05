@@ -1,6 +1,6 @@
 {
   "name": "@mabulu-inc/schema-flow",
-  "version": "1.3.11",
+  "version": "1.3.12",
   "description": "Declarative zero-downtime PostgreSQL migrations. Flows your schema from current state to desired state via YAML-driven table definitions and procedural pre/post scripts.",
   "license": "MIT",
   "type": "module",
@@ -19,9 +19,12 @@
       "default": "./dist/testing/index.js"
     }
   },
+  "homepage": "https://github.com/mabulu-inc/schema-flow#readme",
   "files": [
     "dist",
+    "docs",
     "examples",
+    "llms.txt",
     "README.md",
     "LICENSE"
   ],
@@ -70,12 +73,21 @@
   },
   "keywords": [
     "postgres",
+    "postgresql",
     "migration",
+    "migrations",
     "declarative",
     "zero-downtime",
     "schema",
     "yaml",
-    "database"
+    "database",
+    "ddl",
+    "drift-detection",
+    "rls",
+    "row-level-security",
+    "expand-contract",
+    "devops",
+    "infrastructure-as-code"
   ],
   "repository": {
     "type": "git",
