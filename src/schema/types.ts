@@ -165,6 +165,8 @@ export interface TableSchema {
   grants?: GrantDef[];
   /** Pre-migration checks: SQL assertions that must pass before migration */
   prechecks?: PrecheckDef[];
+  /** Seed rows to insert/update on every migration */
+  seeds?: Record<string, unknown>[];
   /** Table description/comment */
   comment?: string;
 }

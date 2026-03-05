@@ -1,0 +1,48 @@
+# Schema for table: currencies
+# Global reference table for supported currencies. Not tenant-scoped — every
+# tenant shares the same currency catalog. Orders reference this via FK.
+
+table: currencies
+
+columns:
+  - name: code
+    type: varchar(3)
+    primary_key: true
+    comment: "ISO 4217 currency code"
+
+  - name: name
+    type: varchar(50)
+
+  - name: symbol
+    type: varchar(5)
+
+  - name: decimal_digits
+    type: smallint
+    default: "2"
+    comment: "Number of decimal places (e.g. 2 for USD, 0 for JPY)"
+
+checks:
+  - name: chk_code_format
+    expression: "code ~ '^[A-Z]{3}$'"
+
+  - name: chk_decimal_digits_non_negative
+    expression: "decimal_digits >= 0"
+
+seeds:
+  - {code: USD, name: US Dollar,         symbol: $,   decimal_digits: 2}
+  - {code: EUR, name: Euro,              symbol: €,   decimal_digits: 2}
+  - {code: GBP, name: British Pound,     symbol: £,   decimal_digits: 2}
+  - {code: CAD, name: Canadian Dollar,   symbol: CA$, decimal_digits: 2}
+  - {code: AUD, name: Australian Dollar, symbol: A$,  decimal_digits: 2}
+  - {code: JPY, name: Japanese Yen,      symbol: ¥,   decimal_digits: 0}
+  - {code: CNY, name: Chinese Yuan,      symbol: ¥,   decimal_digits: 2}
+  - {code: INR, name: Indian Rupee,      symbol: ₹,   decimal_digits: 2}
+  - {code: BRL, name: Brazilian Real,    symbol: R$,  decimal_digits: 2}
+  - {code: MXN, name: Mexican Peso,      symbol: MX$, decimal_digits: 2}
+
+grants:
+  - to: [app_user, app_manager, app_auditor, app_service]
+    privileges: [SELECT]
+
+  - to: app_admin
+    privileges: [SELECT, INSERT, UPDATE, DELETE]

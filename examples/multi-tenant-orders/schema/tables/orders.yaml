@@ -45,6 +45,9 @@ columns:
   - name: currency
     type: varchar(3)
     default: "'USD'"
+    references:
+      table: currencies
+      column: code
 
   - name: status
     type: order_status

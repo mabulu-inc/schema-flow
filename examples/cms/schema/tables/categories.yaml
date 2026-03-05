@@ -61,6 +61,12 @@ policies:
     using: "true"
     check: "true"
 
+seeds:
+  - {name: General,     slug: general,     position: 0}
+  - {name: News,        slug: news,        position: 1}
+  - {name: Tutorials,   slug: tutorials,   position: 2}
+  - {name: Engineering, slug: engineering,  position: 3}
+
 grants:
   - to: [cms_author, cms_editor, cms_admin]
     privileges: [SELECT]

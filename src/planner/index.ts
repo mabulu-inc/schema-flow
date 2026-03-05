@@ -92,7 +92,8 @@ export type OperationType =
   | "revoke_table"
   | "revoke_column"
   | "grant_sequence"
-  | "revoke_sequence";
+  | "revoke_sequence"
+  | "seed_table";
 
 export interface Operation {
   type: OperationType;
@@ -181,6 +182,14 @@ export async function buildPlan(
       // ALTER TABLE — diff columns, indexes, checks
       const alterOps = await planAlterTable(client, desired, pgSchema);
       allOps.push(...alterOps);
+    }
+  }
+
+  // Plan seeds (after tables are created/altered)
+  for (const desired of desiredSchemas) {
+    if (desired.seeds && desired.seeds.length > 0) {
+      const seedOps = planSeeds(desired, pgSchema);
+      allOps.push(...seedOps);
     }
   }
 
@@ -2012,4 +2021,106 @@ async function planGrantDiff(
   }
 
   return ops;
+}
+
+// ---------------------------------------------------------------------------
+// Seed data — UPDATE where changed + INSERT where missing
+// ---------------------------------------------------------------------------
+
+/** Escape a value for use in a SQL VALUES clause */
+function seedLiteral(value: unknown): string {
+  if (value === null || value === undefined) return "NULL";
+  if (typeof value === "boolean") return value ? "TRUE" : "FALSE";
+  if (typeof value === "number") return String(value);
+  return `'${String(value).replace(/'/g, "''")}'`;
+}
+
+/**
+ * Resolve the primary key column names for a table schema.
+ * Checks both column-level `primary_key: true` and table-level `primary_key: [...]`.
+ */
+function getPkColumns(schema: TableSchema): string[] {
+  if (schema.primary_key && schema.primary_key.length > 0) {
+    return schema.primary_key;
+  }
+  return schema.columns.filter((c) => c.primary_key).map((c) => c.name);
+}
+
+/**
+ * Resolve the key columns used to match seed rows against existing data.
+ * Prefers PK columns when present in seed data; falls back to unique columns.
+ */
+function getSeedKeyColumns(schema: TableSchema, seedCols: string[]): string[] {
+  // Try PK first
+  const pkCols = getPkColumns(schema);
+  if (pkCols.length > 0 && pkCols.every((c) => seedCols.includes(c))) {
+    return pkCols;
+  }
+  // Fall back to a unique column present in seed data
+  for (const col of schema.columns) {
+    if (col.unique && seedCols.includes(col.name)) {
+      return [col.name];
+    }
+  }
+  return [];
+}
+
+/**
+ * Generate seed operations: UPDATE existing rows where data differs,
+ * INSERT missing rows with a NOT EXISTS guard to avoid consuming serials.
+ */
+function planSeeds(schema: TableSchema, pgSchema: string): Operation[] {
+  const seeds = schema.seeds!;
+
+  // Collect all columns referenced in any seed row
+  const allSeedCols = [...new Set(seeds.flatMap((row) => Object.keys(row)))];
+  const keyCols = getSeedKeyColumns(schema, allSeedCols);
+  if (keyCols.length === 0) {
+    logger.warn(`Table "${schema.table}" has seeds but no primary key or unique column in seed data — skipping seeds`);
+    return [];
+  }
+  const nonKeyCols = allSeedCols.filter((c) => !keyCols.includes(c));
+  const qt = `"${pgSchema}"."${schema.table}"`;
+
+  // Build VALUES clause shared by both statements
+  const valuesRows = seeds.map((row) => {
+    const vals = allSeedCols.map((col) => seedLiteral(row[col]));
+    return `  (${vals.join(", ")})`;
+  });
+  const valuesList = valuesRows.join(",\n");
+  const colAliases = allSeedCols.map((c) => `"${c}"`).join(", ");
+  const valuesClause = `(VALUES\n${valuesList}\n) AS v(${colAliases})`;
+
+  const stmts: string[] = [];
+
+  // UPDATE: only rows where at least one non-key column differs
+  if (nonKeyCols.length > 0) {
+    const setCols = nonKeyCols.map((c) => `"${c}" = v."${c}"`).join(", ");
+    const whereKey = keyCols.map((c) => `t."${c}" = v."${c}"`).join(" AND ");
+    const distinctCheck =
+      `row(${nonKeyCols.map((c) => `t."${c}"`).join(", ")})` +
+      ` IS DISTINCT FROM ` +
+      `row(${nonKeyCols.map((c) => `v."${c}"`).join(", ")})`;
+    stmts.push(`UPDATE ${qt} AS t SET ${setCols}\nFROM ${valuesClause}\nWHERE ${whereKey}\n  AND ${distinctCheck}`);
+  }
+
+  // INSERT: only rows whose key doesn't exist yet
+  const insertCols = allSeedCols.map((c) => `"${c}"`).join(", ");
+  const selectCols = allSeedCols.map((c) => `v."${c}"`).join(", ");
+  const existsKey = keyCols.map((c) => `t."${c}" = v."${c}"`).join(" AND ");
+  stmts.push(
+    `INSERT INTO ${qt} (${insertCols})\nSELECT ${selectCols}\nFROM ${valuesClause}\nWHERE NOT EXISTS (SELECT 1 FROM ${qt} AS t WHERE ${existsKey})`,
+  );
+
+  const sql = stmts.join(";\n") + ";";
+  return [
+    {
+      type: "seed_table" as OperationType,
+      table: schema.table,
+      sql,
+      description: `Seed ${seeds.length} row(s) into ${schema.table}`,
+      phase: "structure",
+      destructive: false,
+    },
+  ];
 }

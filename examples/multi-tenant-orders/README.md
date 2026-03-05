@@ -61,8 +61,11 @@ membership_roles
   id, membership_id FK, role (enum), granted_by FK(users)
   + tenant_isolation, timestamps
 
+currencies (global)
+  code (PK), name, symbol, decimal_digits
+
 orders
-  id, user_id FK, amount, currency, status (enum),
+  id, user_id FK, amount, currency FK(currencies), status (enum),
   payment_method (restricted), payment_masked (generated),
   notes
   + tenant_isolation, timestamps
@@ -131,7 +134,7 @@ bypassing RLS. The API calls these instead of manipulating tables directly.
 
 ```sql
 -- 1. User signs up (API running as app_service)
-SELECT register_account('sam@example.com', 'Sam Maxwell');
+SELECT register_account('sam@example.com', 'Sam Mayfield');
 -- Returns: 42 (new user ID)
 
 -- 2. Create membership with initial roles

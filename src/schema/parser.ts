@@ -209,6 +209,10 @@ export function parseTableFile(filePath: string): TableSchema {
     schema.grants = raw.grants.map((g: Record<string, unknown>) => parseGrantDef(g, filePath));
   }
 
+  if (raw.seeds && Array.isArray(raw.seeds)) {
+    schema.seeds = raw.seeds as Record<string, unknown>[];
+  }
+
   if (raw.comment !== undefined) {
     schema.comment = String(raw.comment);
   }
