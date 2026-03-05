@@ -23,6 +23,7 @@ import {
   getIndexComments,
   getTriggerComments,
   getPolicyComments,
+  getFunctionExecuteGrants,
 } from "../introspect/index.js";
 import { withClient } from "../core/db.js";
 import { logger } from "../core/logger.js";
@@ -200,7 +201,8 @@ export async function generateFromDb(config: SchemaFlowConfig, options?: Generat
       logger.info(`Found ${functions.length} functions`);
       for (const fn of functions) {
         const fnComment = await getFunctionComment(client, fn.routine_name, config.pgSchema);
-        const yamlContent = functionToYaml(fn, fnComment);
+        const fnGrants = await getFunctionExecuteGrants(client, fn.routine_name, config.pgSchema);
+        const yamlContent = functionToYaml(fn, fnComment, fnGrants);
         const filePath = path.join(config.functionsDir, `${fn.routine_name}.yaml`);
 
         writeFileSync(filePath, yamlContent, "utf-8");
@@ -389,6 +391,7 @@ function functionToYaml(
     full_return_type?: string;
   },
   comment?: string | null,
+  grants?: { grantee: string; privilege_type: string }[],
 ): string {
   // Prefer full_return_type from pg_get_function_result() — it preserves TABLE(...) definitions
   let returns: string;
@@ -409,6 +412,19 @@ function functionToYaml(
 
   if (fn.security_type === "DEFINER") {
     obj.security = "definer";
+  }
+
+  if (grants && grants.length > 0) {
+    // Group by grantee
+    const byRole = new Map<string, string[]>();
+    for (const g of grants) {
+      if (!byRole.has(g.grantee)) byRole.set(g.grantee, []);
+      byRole.get(g.grantee)!.push(g.privilege_type);
+    }
+    obj.grants = Array.from(byRole.entries()).map(([role, privs]) => ({
+      to: role,
+      privileges: privs,
+    }));
   }
 
   if (comment) {

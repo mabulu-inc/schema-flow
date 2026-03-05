@@ -20,6 +20,7 @@ import type {
   RoleSchema,
   GrantDef,
   GrantPrivilege,
+  FunctionGrantDef,
 } from "./types.js";
 import { logger } from "../core/logger.js";
 
@@ -402,9 +403,40 @@ export function parseFunctionFile(filePath: string): FunctionSchema {
     }
   }
 
+  if (raw.grants && Array.isArray(raw.grants)) {
+    fn.grants = raw.grants.map((g: Record<string, unknown>) => parseFunctionGrantDef(g, filePath));
+  }
+
   if (raw.comment) fn.comment = String(raw.comment);
 
   return fn;
+}
+
+/** Parse a single function grant definition from raw YAML */
+export function parseFunctionGrantDef(grant: Record<string, unknown>, filePath: string): FunctionGrantDef {
+  if (!grant.to) {
+    throw new Error(`Each grant in ${filePath} must have "to" (role name or array)`);
+  }
+  if (!grant.privileges || !Array.isArray(grant.privileges) || grant.privileges.length === 0) {
+    throw new Error(`Each grant in ${filePath} must have "privileges" as a non-empty array`);
+  }
+
+  for (const p of grant.privileges as string[]) {
+    if (String(p).toUpperCase() !== "EXECUTE") {
+      throw new Error(
+        `Function grant in ${filePath} has invalid privilege "${p}". Only EXECUTE is valid for functions.`,
+      );
+    }
+  }
+
+  let to: string | string[];
+  if (Array.isArray(grant.to)) {
+    to = grant.to.map(String);
+  } else {
+    to = String(grant.to);
+  }
+
+  return { to, privileges: ["EXECUTE"] };
 }
 
 const VALID_GRANT_PRIVILEGES = ["SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER", "ALL"];

@@ -17,6 +17,7 @@ import type {
   UniqueConstraintDef,
   RoleSchema,
   GrantDef,
+  FunctionSchema,
 } from "../schema/types.js";
 import {
   introspectTable,
@@ -42,6 +43,7 @@ import {
   getColumnGrants as introspectColumnGrants,
   getOwnedSequences,
   getSequenceGrants as introspectSequenceGrants,
+  getFunctionExecuteGrants as introspectFunctionGrants,
   type ParsedIndex,
 } from "../introspect/index.js";
 import { logger } from "../core/logger.js";
@@ -93,6 +95,8 @@ export type OperationType =
   | "revoke_column"
   | "grant_sequence"
   | "revoke_sequence"
+  | "grant_function"
+  | "revoke_function"
   | "seed_table";
 
 export interface Operation {
@@ -142,6 +146,8 @@ export interface PlanOptions {
   materializedViews?: MaterializedViewSchema[];
   /** Desired roles */
   roles?: RoleSchema[];
+  /** Desired functions (for grant planning) */
+  functions?: FunctionSchema[];
 }
 
 export async function buildPlan(
@@ -229,6 +235,23 @@ export async function buildPlan(
       if (mv.grants && mv.grants.length > 0) {
         const grantOps = await planGrantDiff(client, mv.name, mv.grants, pgSchema);
         allOps.push(...grantOps);
+      }
+    }
+  }
+
+  // Plan grants for functions (after functions are created)
+  if (options.functions) {
+    for (const fn of options.functions) {
+      if (fn.grants && fn.grants.length > 0) {
+        const grantOps = await planFunctionGrantDiff(client, fn, pgSchema);
+        allOps.push(...grantOps);
+      }
+    }
+    // Revoke grants for functions that have no grants in YAML
+    for (const fn of options.functions) {
+      if (!fn.grants || fn.grants.length === 0) {
+        const revokeOps = await planFunctionGrantDiff(client, fn, pgSchema);
+        allOps.push(...revokeOps);
       }
     }
   }
@@ -2015,6 +2038,80 @@ async function planGrantDiff(
               destructive: true,
             });
           }
+        }
+      }
+    }
+  }
+
+  return ops;
+}
+
+// ─── Function Grant Planning ─────────────────────────────────────────────────
+
+async function planFunctionGrantDiff(
+  client: pg.PoolClient,
+  fn: FunctionSchema,
+  pgSchema: string,
+): Promise<Operation[]> {
+  const ops: Operation[] = [];
+  const argsClause = fn.args ? `(${fn.args})` : "()";
+  const qualifiedName = `"${pgSchema}"."${fn.name}"${argsClause}`;
+
+  // Introspect existing function grants
+  const existingGrants = await introspectFunctionGrants(client, fn.name, pgSchema);
+  const existingMap = new Map<string, Set<string>>();
+  for (const g of existingGrants) {
+    if (!existingMap.has(g.grantee)) existingMap.set(g.grantee, new Set());
+    existingMap.get(g.grantee)!.add(g.privilege_type);
+  }
+
+  // Track desired role+privilege combos
+  const desiredPrivs = new Map<string, Set<string>>();
+
+  for (const grant of fn.grants || []) {
+    const roles = Array.isArray(grant.to) ? grant.to : [grant.to];
+    for (const role of roles) {
+      if (!desiredPrivs.has(role)) desiredPrivs.set(role, new Set());
+      for (const priv of grant.privileges) {
+        desiredPrivs.get(role)!.add(priv);
+
+        const existingRolePrivs = existingMap.get(role);
+        if (!existingRolePrivs?.has(priv)) {
+          ops.push({
+            type: "grant_function",
+            sql: `GRANT ${priv} ON FUNCTION ${qualifiedName} TO "${role}";`,
+            description: `Grant ${priv} on function ${fn.name} to ${role}`,
+            phase: "structure",
+            destructive: false,
+          });
+        }
+      }
+    }
+  }
+
+  // Revoke privileges that exist but are not desired
+  for (const [role, existingPrivSet] of existingMap) {
+    const desired = desiredPrivs.get(role);
+    if (!desired) {
+      for (const priv of existingPrivSet) {
+        ops.push({
+          type: "revoke_function",
+          sql: `REVOKE ${priv} ON FUNCTION ${qualifiedName} FROM "${role}";`,
+          description: `Revoke ${priv} on function ${fn.name} from ${role}`,
+          phase: "structure",
+          destructive: true,
+        });
+      }
+    } else {
+      for (const priv of existingPrivSet) {
+        if (!desired.has(priv)) {
+          ops.push({
+            type: "revoke_function",
+            sql: `REVOKE ${priv} ON FUNCTION ${qualifiedName} FROM "${role}";`,
+            description: `Revoke ${priv} on function ${fn.name} from ${role}`,
+            phase: "structure",
+            destructive: true,
+          });
         }
       }
     }

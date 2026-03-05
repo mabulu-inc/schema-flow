@@ -1378,3 +1378,153 @@ grants:
     expect(seqAfter).not.toContain("SELECT");
   });
 });
+
+// ─── Helper: check function grants ────────────────────────────────────────────
+
+async function getFunctionGrants(connectionString: string, fnName: string, roleName: string): Promise<string[]> {
+  const res = await execSql(
+    connectionString,
+    `SELECT p.privilege_type
+     FROM pg_proc proc
+     JOIN pg_namespace n ON n.oid = proc.pronamespace
+     CROSS JOIN LATERAL aclexplode(proc.proacl) AS p(grantor, grantee, privilege_type, is_grantable)
+     JOIN pg_roles r ON r.oid = p.grantee
+     WHERE n.nspname = 'public' AND proc.proname = $1 AND r.rolname = $2
+     ORDER BY p.privilege_type`,
+    [fnName, roleName],
+  );
+  return res.rows.map((r: { privilege_type: string }) => r.privilege_type);
+}
+
+// ─── Function grant tests ─────────────────────────────────────────────────────
+
+describe("grants: function EXECUTE grants", () => {
+  const ctx = useTestProject({ closeAppPool: closePool });
+
+  it("grants EXECUTE on a function to a role", async () => {
+    writeSchema(
+      ctx.project.rolesDir,
+      "fn_reader.yaml",
+      `role: fn_reader
+login: false
+`,
+    );
+    writeSchema(
+      ctx.project.functionsDir,
+      "hello.yaml",
+      `name: hello
+language: sql
+returns: text
+body: "SELECT 'hello'::text;"
+replace: true
+grants:
+  - to: fn_reader
+    privileges: [EXECUTE]
+`,
+    );
+
+    const config = resolveConfig({
+      connectionString: ctx.connectionString,
+      baseDir: ctx.project.baseDir,
+      dryRun: false,
+    });
+    const result = await runMigrate(config);
+    expect(result.success).toBe(true);
+
+    const grants = await getFunctionGrants(ctx.connectionString, "hello", "fn_reader");
+    expect(grants).toContain("EXECUTE");
+  });
+
+  it("revokes EXECUTE when grant is removed from YAML", async () => {
+    writeSchema(
+      ctx.project.rolesDir,
+      "fn_revoker.yaml",
+      `role: fn_revoker
+login: false
+`,
+    );
+    writeSchema(
+      ctx.project.functionsDir,
+      "greet.yaml",
+      `name: greet
+language: sql
+returns: text
+body: "SELECT 'hi'::text;"
+replace: true
+grants:
+  - to: fn_revoker
+    privileges: [EXECUTE]
+`,
+    );
+
+    const config = resolveConfig({
+      connectionString: ctx.connectionString,
+      baseDir: ctx.project.baseDir,
+      dryRun: false,
+    });
+    const result = await runMigrate(config);
+    expect(result.success).toBe(true);
+
+    const grantsBefore = await getFunctionGrants(ctx.connectionString, "greet", "fn_revoker");
+    expect(grantsBefore).toContain("EXECUTE");
+
+    // Remove grants from YAML
+    writeSchema(
+      ctx.project.functionsDir,
+      "greet.yaml",
+      `name: greet
+language: sql
+returns: text
+body: "SELECT 'hi'::text;"
+replace: true
+`,
+    );
+
+    const config2 = resolveConfig({
+      connectionString: ctx.connectionString,
+      baseDir: ctx.project.baseDir,
+      dryRun: false,
+      allowDestructive: true,
+    });
+    const result2 = await runMigrate(config2);
+    expect(result2.success).toBe(true);
+
+    const grantsAfter = await getFunctionGrants(ctx.connectionString, "greet", "fn_revoker");
+    expect(grantsAfter).not.toContain("EXECUTE");
+  });
+
+  it("is idempotent — re-running does not produce errors", async () => {
+    writeSchema(
+      ctx.project.rolesDir,
+      "fn_idem.yaml",
+      `role: fn_idem
+login: false
+`,
+    );
+    writeSchema(
+      ctx.project.functionsDir,
+      "idem_fn.yaml",
+      `name: idem_fn
+language: sql
+returns: text
+body: "SELECT 'ok'::text;"
+replace: true
+grants:
+  - to: fn_idem
+    privileges: [EXECUTE]
+`,
+    );
+
+    const config = resolveConfig({
+      connectionString: ctx.connectionString,
+      baseDir: ctx.project.baseDir,
+      dryRun: false,
+    });
+    const result1 = await runMigrate(config);
+    expect(result1.success).toBe(true);
+
+    // Run again — should be a no-op
+    const result2 = await runMigrate(config);
+    expect(result2.success).toBe(true);
+  });
+});

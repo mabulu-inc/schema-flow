@@ -1177,3 +1177,28 @@ export async function getSequenceGrants(
   );
   return res.rows;
 }
+
+/** Get grants on a specific function (excludes owner grants) */
+export async function getFunctionExecuteGrants(
+  client: pg.PoolClient,
+  fnName: string,
+  pgSchema: string,
+): Promise<DbTableGrant[]> {
+  const res = await client.query<DbTableGrant>(
+    `SELECT
+       r.rolname AS grantee,
+       p.privilege_type,
+       CASE WHEN p.is_grantable THEN 'YES' ELSE 'NO' END AS is_grantable
+     FROM pg_proc proc
+     JOIN pg_namespace n ON n.oid = proc.pronamespace
+     CROSS JOIN LATERAL aclexplode(proc.proacl) AS p(grantor, grantee, privilege_type, is_grantable)
+     JOIN pg_roles r ON r.oid = p.grantee
+     WHERE n.nspname = $1 AND proc.proname = $2
+       AND p.grantor != p.grantee
+       AND r.rolname != 'postgres'
+       AND r.rolname NOT LIKE 'pg_%'
+     ORDER BY r.rolname, p.privilege_type`,
+    [pgSchema, fnName],
+  );
+  return res.rows;
+}

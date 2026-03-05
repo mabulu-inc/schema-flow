@@ -190,8 +190,17 @@ export interface FunctionSchema {
   replace?: boolean;
   /** Security mode: "definer" generates SECURITY DEFINER, "invoker" is the default */
   security?: "definer" | "invoker";
+  /** Function grants (EXECUTE) */
+  grants?: FunctionGrantDef[];
   /** Function description/comment */
   comment?: string;
+}
+
+export interface FunctionGrantDef {
+  /** Role(s) to grant to */
+  to: string | string[];
+  /** Privileges to grant (only EXECUTE is valid for functions) */
+  privileges: "EXECUTE"[];
 }
 
 export interface EnumSchema {

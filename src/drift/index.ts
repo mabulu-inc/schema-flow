@@ -50,6 +50,7 @@ import {
   getConstraintComments,
   getPolicyComments,
   type DbIndex,
+  getFunctionExecuteGrants,
 } from "../introspect/index.js";
 import type { FunctionSchema } from "../schema/types.js";
 
@@ -359,6 +360,48 @@ export async function detectDrift(config: SchemaFlowConfig): Promise<DriftReport
               description: `Function comment on "${fn.name}" differs`,
               details: [{ field: "comment", expected: fn.comment, actual: currentComment || "(none)" }],
             });
+          }
+        }
+
+        // Compare function grants
+        const dbFnGrants = await getFunctionExecuteGrants(client, fn.name, config.pgSchema);
+        const dbGrantMap = new Map<string, Set<string>>();
+        for (const g of dbFnGrants) {
+          if (!dbGrantMap.has(g.grantee)) dbGrantMap.set(g.grantee, new Set());
+          dbGrantMap.get(g.grantee)!.add(g.privilege_type);
+        }
+        const desiredGrantMap = new Map<string, Set<string>>();
+        for (const g of fn.grants || []) {
+          const roles = Array.isArray(g.to) ? g.to : [g.to];
+          for (const role of roles) {
+            if (!desiredGrantMap.has(role)) desiredGrantMap.set(role, new Set());
+            for (const priv of g.privileges) desiredGrantMap.get(role)!.add(priv);
+          }
+        }
+        // Check for missing grants
+        for (const [role, privs] of desiredGrantMap) {
+          for (const priv of privs) {
+            if (!dbGrantMap.get(role)?.has(priv)) {
+              items.push({
+                category: "grant",
+                direction: "missing_from_db",
+                name: `${fn.name}:${role}`,
+                description: `Grant ${priv} on function "${fn.name}" to "${role}" missing from database`,
+              });
+            }
+          }
+        }
+        // Check for extra grants
+        for (const [role, privs] of dbGrantMap) {
+          for (const priv of privs) {
+            if (!desiredGrantMap.get(role)?.has(priv)) {
+              items.push({
+                category: "grant",
+                direction: "extra_in_db",
+                name: `${fn.name}:${role}`,
+                description: `Grant ${priv} on function "${fn.name}" to "${role}" exists in database but not in YAML`,
+              });
+            }
           }
         }
       }
