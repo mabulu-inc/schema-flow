@@ -181,6 +181,7 @@ export async function detectDrift(config: SchemaFlowConfig): Promise<DriftReport
 
       const current = await introspectTable(client, desired.table, config.pgSchema);
       diffTable(desired, current, items);
+      await normalizeCheckDrift(client, desired, current, items, config.pgSchema);
 
       // Index diff
       const dbIndexes = await getTableIndexes(client, desired.table, config.pgSchema);
@@ -760,6 +761,65 @@ export async function detectDrift(config: SchemaFlowConfig): Promise<DriftReport
     hasDrift: items.length > 0,
     summary: { extraInDb, missingFromDb, mismatches, tablesChecked, functionsChecked },
   };
+}
+
+/**
+ * Re-check any check-constraint mismatches by normalizing the YAML expression
+ * through PG. Only fires for constraints already flagged as mismatched, so
+ * zero cost when expressions already match (the common case).
+ *
+ * pg_get_constraintdef is not idempotent — the same semantic expression can
+ * produce different text depending on the original DDL. By creating a temp
+ * constraint on the actual table and reading back the normalized form, we
+ * can tell whether the mismatch is real or just cosmetic.
+ */
+async function normalizeCheckDrift(
+  client: pg.PoolClient,
+  desired: TableSchema,
+  current: TableSchema,
+  items: DriftItem[],
+  pgSchema: string,
+): Promise<void> {
+  const checkMismatches = items.filter(
+    (i) =>
+      i.category === "constraint" &&
+      i.direction === "mismatch" &&
+      i.table === desired.table &&
+      i.details?.some((d) => d.field === "expression"),
+  );
+  if (checkMismatches.length === 0) return;
+
+  const currentCheckMap = new Map((current.checks || []).map((c) => [c.name, c]));
+
+  for (const item of checkMismatches) {
+    const desiredCheck = (desired.checks || []).find((c) => c.name === item.name);
+    if (!desiredCheck?.expression) continue;
+
+    const tempName = `_sf_norm_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+    try {
+      await client.query("BEGIN");
+      await client.query(
+        `ALTER TABLE "${pgSchema}"."${desired.table}" ADD CONSTRAINT "${tempName}" CHECK (${desiredCheck.expression})`,
+      );
+      const res = await client.query<{ pg_get_constraintdef: string }>(
+        `SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conname = $1`,
+        [tempName],
+      );
+      await client.query("ROLLBACK");
+
+      if (res.rows.length > 0) {
+        let normalized = res.rows[0].pg_get_constraintdef;
+        normalized = normalized.replace(/^CHECK\s*\(\((.*)\)\)$/is, "$1").replace(/^CHECK\s*\((.*)\)$/is, "$1");
+        const dbExpr = (currentCheckMap.get(item.name)?.expression || "").replace(/\s+/g, " ").trim();
+        if (normalized.replace(/\s+/g, " ").trim() === dbExpr) {
+          // Cosmetic difference — remove the false mismatch
+          items.splice(items.indexOf(item), 1);
+        }
+      }
+    } catch {
+      await client.query("ROLLBACK");
+    }
+  }
 }
 
 function diffTable(desired: TableSchema, current: TableSchema, items: DriftItem[]): void {
