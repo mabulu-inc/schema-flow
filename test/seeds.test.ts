@@ -75,12 +75,9 @@ seeds:
     await closePool();
     await runMigrate(config);
 
-    // The NOT EXISTS guard means the serial sequence was never advanced.
-    // Verify by checking the current sequence value — it should still be at 1
-    // (the default start value, never consumed by seed inserts).
-    const res = await execSql(ctx.connectionString, `SELECT last_value, is_called FROM statuses_id_seq`);
-    // is_called=false means nextval hasn't been called yet (sequence at initial value)
-    expect(res.rows[0].is_called).toBe(false);
+    // Sequence should be set to max(id)=2, so next insert gets id=3
+    const res = await execSql(ctx.connectionString, `SELECT last_value FROM statuses_id_seq`);
+    expect(Number(res.rows[0].last_value)).toBe(2);
   });
 
   it("updates changed seed data without inserting duplicates", async () => {
@@ -232,6 +229,36 @@ seeds:
 
     const res = await execSql(ctx.connectionString, `SELECT name FROM currencies WHERE code = 'USD'`);
     expect(res.rows[0].name).toBe("US Dollar");
+  });
+
+  it("resets serial sequence after seeding explicit IDs", async () => {
+    writeSchema(
+      ctx.project.tablesDir,
+      "statuses.yaml",
+      `table: statuses
+columns:
+  - name: id
+    type: serial
+    primary_key: true
+  - name: label
+    type: text
+seeds:
+  - {id: 1, label: active}
+  - {id: 2, label: inactive}
+  - {id: 3, label: archived}
+`,
+    );
+
+    const config = resolveConfig({
+      connectionString: ctx.connectionString,
+      baseDir: ctx.project.baseDir,
+      dryRun: false,
+    });
+    await runMigrate(config);
+
+    // The sequence should be at 3, so the next insert gets id=4
+    const res = await execSql(ctx.connectionString, `INSERT INTO statuses (label) VALUES ('draft') RETURNING id`);
+    expect(res.rows[0].id).toBe(4);
   });
 
   it("falls back to unique column when PK is serial and not in seed data", async () => {

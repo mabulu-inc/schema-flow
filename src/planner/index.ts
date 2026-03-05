@@ -2112,6 +2112,15 @@ function planSeeds(schema: TableSchema, pgSchema: string): Operation[] {
     `INSERT INTO ${qt} (${insertCols})\nSELECT ${selectCols}\nFROM ${valuesClause}\nWHERE NOT EXISTS (SELECT 1 FROM ${qt} AS t WHERE ${existsKey})`,
   );
 
+  // Reset serial sequences to max(col) so subsequent inserts don't conflict
+  for (const col of schema.columns) {
+    if (isSerialType(col.type) && allSeedCols.includes(col.name)) {
+      stmts.push(
+        `SELECT setval(pg_get_serial_sequence('"${pgSchema}"."${schema.table}"', '${col.name}'), greatest((SELECT max("${col.name}") FROM ${qt}), 1))`,
+      );
+    }
+  }
+
   const sql = stmts.join(";\n") + ";";
   return [
     {

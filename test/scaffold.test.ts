@@ -218,6 +218,35 @@ describe("generateFromDb", () => {
     expect(content).not.toMatch(/returns: record\b/);
   });
 
+  it("includes seed data for tables listed in seedTables", async () => {
+    await execSql(
+      ctx.connectionString,
+      `CREATE TABLE currencies (code text PRIMARY KEY, name text NOT NULL, symbol text NOT NULL)`,
+    );
+    await execSql(
+      ctx.connectionString,
+      `INSERT INTO currencies (code, name, symbol) VALUES ('USD', 'US Dollar', '$'), ('EUR', 'Euro', '€')`,
+    );
+
+    await execSql(ctx.connectionString, `CREATE TABLE orders (id serial PRIMARY KEY, amount numeric NOT NULL)`);
+    await execSql(ctx.connectionString, `INSERT INTO orders (amount) VALUES (99.99)`);
+
+    const config = resolveConfig({
+      connectionString: ctx.connectionString,
+      baseDir: ctx.project.baseDir,
+    });
+
+    await generateFromDb(config, { seedTables: ["currencies"] });
+
+    const currContent = readFileSync(path.join(ctx.project.tablesDir, "currencies.yaml"), "utf-8");
+    expect(currContent).toContain("seeds:");
+    expect(currContent).toContain("USD");
+    expect(currContent).toContain("Euro");
+
+    const ordersContent = readFileSync(path.join(ctx.project.tablesDir, "orders.yaml"), "utf-8");
+    expect(ordersContent).not.toContain("seeds:");
+  });
+
   it("generates SETOF return type for set-returning functions", async () => {
     await execSql(
       ctx.connectionString,

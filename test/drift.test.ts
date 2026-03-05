@@ -308,6 +308,112 @@ replace: true
     expect(fnDrift).toHaveLength(0);
   });
 
+  it("detects missing seed row", async () => {
+    await execSql(ctx.connectionString, `CREATE TABLE currencies (code text PRIMARY KEY, name text NOT NULL)`);
+    await execSql(ctx.connectionString, `INSERT INTO currencies (code, name) VALUES ('USD', 'US Dollar')`);
+
+    writeSchema(
+      ctx.project.tablesDir,
+      "currencies.yaml",
+      `table: currencies
+columns:
+  - name: code
+    type: text
+    primary_key: true
+  - name: name
+    type: text
+seeds:
+  - code: USD
+    name: US Dollar
+  - code: EUR
+    name: Euro
+`,
+    );
+
+    const config = resolveConfig({
+      connectionString: ctx.connectionString,
+      baseDir: ctx.project.baseDir,
+    });
+
+    const report = await detectDrift(config);
+    expect(report.hasDrift).toBe(true);
+    const seedDrift = report.items.find((i) => i.category === "seed" && i.table === "currencies");
+    expect(seedDrift).toBeDefined();
+    expect(seedDrift!.direction).toBe("missing_from_db");
+    expect(seedDrift!.description).toContain("EUR");
+  });
+
+  it("detects seed row with wrong value", async () => {
+    await execSql(ctx.connectionString, `CREATE TABLE currencies (code text PRIMARY KEY, name text NOT NULL)`);
+    await execSql(ctx.connectionString, `INSERT INTO currencies (code, name) VALUES ('USD', 'Dollar')`);
+
+    writeSchema(
+      ctx.project.tablesDir,
+      "currencies.yaml",
+      `table: currencies
+columns:
+  - name: code
+    type: text
+    primary_key: true
+  - name: name
+    type: text
+seeds:
+  - code: USD
+    name: US Dollar
+`,
+    );
+
+    const config = resolveConfig({
+      connectionString: ctx.connectionString,
+      baseDir: ctx.project.baseDir,
+    });
+
+    const report = await detectDrift(config);
+    expect(report.hasDrift).toBe(true);
+    const seedDrift = report.items.find((i) => i.category === "seed" && i.table === "currencies");
+    expect(seedDrift).toBeDefined();
+    expect(seedDrift!.direction).toBe("mismatch");
+    expect(seedDrift!.details).toBeDefined();
+    expect(
+      seedDrift!.details!.some((d) => d.field === "name" && d.expected === "US Dollar" && d.actual === "Dollar"),
+    ).toBe(true);
+  });
+
+  it("reports no drift when seeds match DB", async () => {
+    await execSql(ctx.connectionString, `CREATE TABLE currencies (code text PRIMARY KEY, name text NOT NULL)`);
+    await execSql(
+      ctx.connectionString,
+      `INSERT INTO currencies (code, name) VALUES ('USD', 'US Dollar'), ('EUR', 'Euro')`,
+    );
+
+    writeSchema(
+      ctx.project.tablesDir,
+      "currencies.yaml",
+      `table: currencies
+columns:
+  - name: code
+    type: text
+    primary_key: true
+  - name: name
+    type: text
+seeds:
+  - code: USD
+    name: US Dollar
+  - code: EUR
+    name: Euro
+`,
+    );
+
+    const config = resolveConfig({
+      connectionString: ctx.connectionString,
+      baseDir: ctx.project.baseDir,
+    });
+
+    const report = await detectDrift(config);
+    const seedDrift = report.items.filter((i) => i.category === "seed");
+    expect(seedDrift).toHaveLength(0);
+  });
+
   it("formats JSON report", async () => {
     const config = resolveConfig({
       connectionString: ctx.connectionString,

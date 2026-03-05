@@ -40,6 +40,7 @@ interface CliArgs {
     apply: boolean;
     env?: string;
     maxRetries?: string;
+    seeds?: string;
   };
 }
 
@@ -69,6 +70,7 @@ function parseArgs(argv: string[]): CliArgs {
     apply: args.includes("--apply"),
     env: getFlag(args, "--env"),
     maxRetries: getFlag(args, "--max-retries"),
+    seeds: getFlag(args, "--seeds"),
   };
 
   return { command, subcommand, name, flags };
@@ -109,6 +111,7 @@ function printHelp(): void {
     ${"\x1b[36m"}contract${"\x1b[0m"}            Finalize expand/contract: drop old columns and triggers
     ${"\x1b[36m"}expand-status${"\x1b[0m"}       Show current expand/contract operation status
     ${"\x1b[36m"}generate${"\x1b[0m"}            Generate schema files from existing database
+    ${"\x1b[36m"}generate --seeds t1,t2${"\x1b[0m"}  Include row data as seeds for specified tables
     ${"\x1b[36m"}baseline${"\x1b[0m"}            Mark existing database as managed without running migrations
     ${"\x1b[36m"}new pre <name>${"\x1b[0m"}      Scaffold a new pre-migration script
     ${"\x1b[36m"}new post <name>${"\x1b[0m"}     Scaffold a new post-migration script
@@ -130,6 +133,7 @@ function printHelp(): void {
     --output-dir <dir>         Output directory (sql)
     --name <name>              Output file name suffix (sql)
     --max-retries <n>          Max retries on transient DB errors (default: 3, 0 to disable)
+    --seeds <tables>           Comma-separated tables to capture as seeds (generate)
     --skip-checks              Skip pre-migration checks
     --apply                    Execute the operation (down)
     --env <name>               Select environment from schema-flow.config.yaml
@@ -593,7 +597,8 @@ async function main(): Promise<void> {
       }
 
       case "generate": {
-        await generateFromDb(config);
+        const seedTables = args.flags.seeds ? args.flags.seeds.split(",").map((s) => s.trim()) : undefined;
+        await generateFromDb(config, seedTables ? { seedTables } : undefined);
         break;
       }
 

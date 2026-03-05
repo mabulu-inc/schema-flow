@@ -121,7 +121,7 @@ function startContainer(runtime: string): number {
   const deadline = Date.now() + 30_000;
   while (Date.now() < deadline) {
     if (isContainerReady(runtime)) return port;
-    spawnSync("sleep", ["0.5"], { stdio: "ignore" });
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 500);
   }
 
   throw new Error("PostgreSQL container did not become ready within 30 seconds");

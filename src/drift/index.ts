@@ -1,6 +1,7 @@
 // src/drift/index.ts
 // Drift detection: compare live DB state vs. YAML schema definitions
 
+import pg from "pg";
 import path from "node:path";
 import type { SchemaFlowConfig } from "../core/config.js";
 import type {
@@ -68,7 +69,8 @@ export interface DriftItem {
     | "materialized_view"
     | "comment"
     | "role"
-    | "grant";
+    | "grant"
+    | "seed";
   direction: "extra_in_db" | "missing_from_db" | "mismatch";
   table?: string;
   name: string;
@@ -287,6 +289,11 @@ export async function detectDrift(config: SchemaFlowConfig): Promise<DriftReport
             });
           }
         }
+      }
+
+      // Seed drift
+      if (desired.seeds && desired.seeds.length > 0) {
+        await diffSeeds(client, desired, config.pgSchema, items);
       }
     }
 
@@ -1266,4 +1273,86 @@ function isSerial(t: string): boolean {
 
 function isIntegerEquiv(t: string): boolean {
   return ["integer", "bigint", "smallint", "int", "int4", "int8", "int2"].includes(t.toLowerCase());
+}
+
+// ---------------------------------------------------------------------------
+// Seed drift
+// ---------------------------------------------------------------------------
+
+function getSeedKeyColumns(schema: TableSchema, seedCols: string[]): string[] {
+  const pkCols =
+    schema.primary_key && schema.primary_key.length > 0
+      ? schema.primary_key
+      : schema.columns.filter((c) => c.primary_key).map((c) => c.name);
+  if (pkCols.length > 0 && pkCols.every((c) => seedCols.includes(c))) {
+    return pkCols;
+  }
+  for (const col of schema.columns) {
+    if (col.unique && seedCols.includes(col.name)) {
+      return [col.name];
+    }
+  }
+  return [];
+}
+
+async function diffSeeds(
+  client: pg.PoolClient,
+  desired: TableSchema,
+  pgSchema: string,
+  items: DriftItem[],
+): Promise<void> {
+  const seeds = desired.seeds!;
+  const allSeedCols = [...new Set(seeds.flatMap((row) => Object.keys(row)))];
+  const keyCols = getSeedKeyColumns(desired, allSeedCols);
+  if (keyCols.length === 0) return;
+
+  const nonKeyCols = allSeedCols.filter((c) => !keyCols.includes(c));
+  const qt = `"${pgSchema}"."${desired.table}"`;
+
+  for (const row of seeds) {
+    const whereClause = keyCols.map((c, i) => `"${c}" = $${i + 1}`).join(" AND ");
+    const keyValues = keyCols.map((c) => row[c] ?? null);
+    const keyLabel = keyCols.map((c) => `${c}=${String(row[c])}`).join(", ");
+
+    const res = await client.query(
+      `SELECT ${allSeedCols.map((c) => `"${c}"`).join(", ")} FROM ${qt} WHERE ${whereClause}`,
+      keyValues,
+    );
+
+    if (res.rows.length === 0) {
+      items.push({
+        category: "seed",
+        direction: "missing_from_db",
+        table: desired.table,
+        name: keyLabel,
+        description: `Seed row (${keyLabel}) missing from "${desired.table}"`,
+      });
+      continue;
+    }
+
+    const dbRow = res.rows[0];
+    const mismatches: { field: string; expected: string; actual: string }[] = [];
+    for (const col of nonKeyCols) {
+      const expected = row[col];
+      const actual = dbRow[col];
+      if (String(expected ?? null) !== String(actual ?? null)) {
+        mismatches.push({
+          field: col,
+          expected: String(expected ?? "NULL"),
+          actual: String(actual ?? "NULL"),
+        });
+      }
+    }
+
+    if (mismatches.length > 0) {
+      items.push({
+        category: "seed",
+        direction: "mismatch",
+        table: desired.table,
+        name: keyLabel,
+        description: `Seed row (${keyLabel}) in "${desired.table}" has mismatched values`,
+        details: mismatches,
+      });
+    }
+  }
 }
