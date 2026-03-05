@@ -1,14 +1,35 @@
 # Getting Started
 
+## Configure the Registry
+
+schema-flow is published to [GitHub Packages](https://github.com/mabulu-inc/schema-flow/pkgs/npm/%40mabulu-inc/schema-flow), not npmjs. You need to tell npm/pnpm where to find `@mabulu-inc` packages.
+
+Create or edit `.npmrc` in your project root (or home directory for global config):
+
+```ini
+@mabulu-inc:registry=https://npm.pkg.github.com
+//npm.pkg.github.com/:_authToken=${GITHUB_TOKEN}
+```
+
+You need a GitHub personal access token with `read:packages` scope. [Create one here](https://github.com/settings/tokens/new?scopes=read:packages) and set it:
+
+```bash
+export GITHUB_TOKEN=ghp_your_token_here
+```
+
+::: tip CI/CD
+In GitHub Actions, `GITHUB_TOKEN` is available automatically. For other CI systems, add your token as a secret.
+:::
+
 ## Install
 
-schema-flow runs via `npx` — no global install required:
+Once the registry is configured, run via `npx` — no global install required:
 
 ```bash
 npx @mabulu-inc/schema-flow --version
 ```
 
-Or install it as a dev dependency:
+Or install as a dev dependency:
 
 ```bash
 npm install -D @mabulu-inc/schema-flow

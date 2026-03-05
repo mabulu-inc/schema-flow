@@ -2,6 +2,10 @@
 
 A practical guide for teams migrating from Prisma, TypeORM, Sequelize, Django, Rails/ActiveRecord, or SQLAlchemy/Alembic to schema-flow.
 
+::: tip Prerequisites
+schema-flow is on GitHub Packages. See [Getting Started](./getting-started#configure-the-registry) for registry setup.
+:::
+
 ## Why Teams Switch
 
 ORMs are great for writing queries. They're less great for managing PostgreSQL schemas. Here's why teams outgrow ORM-managed migrations:

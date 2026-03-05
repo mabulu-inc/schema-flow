@@ -22,6 +22,23 @@ npx @mabulu-inc/schema-flow run      # apply pre → migrate → post
 - **Phase control** — Run `pre`, `migrate`, `post` independently or all at once.
 - **Generate from existing DB** — Bootstrap your schema files from a live database with `schema-flow generate`.
 
+## Setup
+
+This package is published to **GitHub Packages**. Add this to `.npmrc` in your project root:
+
+```ini
+@mabulu-inc:registry=https://npm.pkg.github.com
+//npm.pkg.github.com/:_authToken=${GITHUB_TOKEN}
+```
+
+Set a [personal access token](https://github.com/settings/tokens/new?scopes=read:packages) with `read:packages` scope:
+
+```bash
+export GITHUB_TOKEN=ghp_your_token_here
+```
+
+> In GitHub Actions, `GITHUB_TOKEN` is available automatically.
+
 ## Quick Start
 
 ### 1. Initialize the directory structure

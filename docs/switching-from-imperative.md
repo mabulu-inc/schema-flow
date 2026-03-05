@@ -2,6 +2,10 @@
 
 A practical guide for teams migrating from Knex, Flyway, Liquibase, golang-migrate, dbmate, or raw SQL migration files to schema-flow.
 
+::: tip Prerequisites
+schema-flow is on GitHub Packages. See [Getting Started](./getting-started#configure-the-registry) for registry setup.
+:::
+
 ## Why Teams Switch
 
 After a year or two with imperative migrations, most teams hit the same pain points:

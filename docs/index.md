@@ -33,6 +33,17 @@ features:
 
 ## Quick Start
 
+**1. Configure the registry** — schema-flow is on [GitHub Packages](https://github.com/mabulu-inc/schema-flow/pkgs/npm/%40mabulu-inc/schema-flow). Add to `.npmrc`:
+
+```ini
+@mabulu-inc:registry=https://npm.pkg.github.com
+//npm.pkg.github.com/:_authToken=${GITHUB_TOKEN}
+```
+
+Set a [personal access token](https://github.com/settings/tokens/new?scopes=read:packages) with `read:packages` scope, then `export GITHUB_TOKEN=ghp_...`. See [full setup](./getting-started#configure-the-registry).
+
+**2. Generate or init:**
+
 ```bash
 # Generate YAML from an existing database
 DATABASE_URL="postgresql://..." npx @mabulu-inc/schema-flow generate
