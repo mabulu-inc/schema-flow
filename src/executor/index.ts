@@ -228,6 +228,12 @@ export async function runMigrate(config: SchemaFlowConfig): Promise<ExecutionRes
       }
 
       try {
+        // Create schema if not public
+        if (config.pgSchema !== "public" && !config.dryRun) {
+          logger.step("MIGRATE", `Ensuring schema "${config.pgSchema}" exists`);
+          await client.query(`CREATE SCHEMA IF NOT EXISTS "${config.pgSchema}"`);
+        }
+
         await tracker.ensureTable(client);
         const tracked = await tracker.getTracked(client);
 
@@ -542,8 +548,21 @@ export async function runMigrate(config: SchemaFlowConfig): Promise<ExecutionRes
                     for (const fn of parsedFunctions) {
                       const replaceClause = fn.replace ? "OR REPLACE " : "";
                       const argsClause = fn.args ? `(${fn.args})` : "()";
-                      const securityClause = fn.security === "definer" ? " SECURITY DEFINER" : "";
-                      const sql = `CREATE ${replaceClause}FUNCTION ${fn.name}${argsClause} RETURNS ${fn.returns} LANGUAGE ${fn.language}${securityClause} AS $fn_body$\n${fn.body}\n$fn_body$;`;
+                      const qualifiers: string[] = [];
+                      qualifiers.push(`LANGUAGE ${fn.language}`);
+                      if (fn.volatility) qualifiers.push(fn.volatility.toUpperCase());
+                      if (fn.security === "definer") qualifiers.push("SECURITY DEFINER");
+                      if (fn.parallel) qualifiers.push(`PARALLEL ${fn.parallel.toUpperCase()}`);
+                      if (fn.strict) qualifiers.push("STRICT");
+                      if (fn.leakproof) qualifiers.push("LEAKPROOF");
+                      if (fn.cost !== undefined) qualifiers.push(`COST ${fn.cost}`);
+                      if (fn.rows !== undefined) qualifiers.push(`ROWS ${fn.rows}`);
+                      if (fn.set) {
+                        for (const [key, val] of Object.entries(fn.set)) {
+                          qualifiers.push(`SET ${key} = ${val}`);
+                        }
+                      }
+                      const sql = `CREATE ${replaceClause}FUNCTION ${fn.name}${argsClause} RETURNS ${fn.returns} ${qualifiers.join(" ")} AS $fn_body$\n${fn.body}\n$fn_body$;`;
                       logger.debug(`Creating function: ${fn.name}`);
                       try {
                         await client.query(sql);

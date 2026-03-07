@@ -47,6 +47,7 @@ import {
   type ParsedIndex,
 } from "../introspect/index.js";
 import { logger } from "../core/logger.js";
+import { isSqlExpression } from "../schema/parser.js";
 import pg from "pg";
 
 export type OperationType =
@@ -1335,6 +1336,22 @@ async function planExtensions(
     }
   }
 
+  // Schema grants (e.g., GRANT USAGE ON SCHEMA)
+  if (desired.schema_grants) {
+    for (const sg of desired.schema_grants) {
+      for (const schema of sg.schemas) {
+        const roleList = sg.roles.map((r) => `"${r}"`).join(", ");
+        ops.push({
+          type: "create_extension" as OperationType,
+          sql: `GRANT ${sg.privilege} ON SCHEMA "${schema}" TO ${roleList};`,
+          description: `Grant ${sg.privilege} on schema ${schema} to ${sg.roles.join(", ")}`,
+          phase: "structure",
+          destructive: false,
+        });
+      }
+    }
+  }
+
   return ops;
 }
 
@@ -1822,6 +1839,10 @@ function buildRoleAttributes(role: RoleSchema): string {
   else if (role.createrole === false) parts.push("NOCREATEROLE");
   if (role.inherit === false) parts.push("NOINHERIT");
   else if (role.inherit === true) parts.push("INHERIT");
+  if (role.bypassrls === true) parts.push("BYPASSRLS");
+  else if (role.bypassrls === false) parts.push("NOBYPASSRLS");
+  if (role.replication === true) parts.push("REPLICATION");
+  else if (role.replication === false) parts.push("NOREPLICATION");
   if (role.connection_limit !== undefined && role.connection_limit >= 0) {
     parts.push(`CONNECTION LIMIT ${role.connection_limit}`);
   }
@@ -1835,12 +1856,16 @@ function diffRoleAttributes(desired: RoleSchema, existing: RoleSchema): string[]
   const desiredCreatedb = desired.createdb ?? false;
   const desiredCreaterole = desired.createrole ?? false;
   const desiredInherit = desired.inherit ?? true;
+  const desiredBypassrls = desired.bypassrls ?? false;
+  const desiredReplication = desired.replication ?? false;
 
   if (desiredLogin !== existing.login) clauses.push(desiredLogin ? "LOGIN" : "NOLOGIN");
   if (desiredSuperuser !== existing.superuser) clauses.push(desiredSuperuser ? "SUPERUSER" : "NOSUPERUSER");
   if (desiredCreatedb !== existing.createdb) clauses.push(desiredCreatedb ? "CREATEDB" : "NOCREATEDB");
   if (desiredCreaterole !== existing.createrole) clauses.push(desiredCreaterole ? "CREATEROLE" : "NOCREATEROLE");
   if (desiredInherit !== existing.inherit) clauses.push(desiredInherit ? "INHERIT" : "NOINHERIT");
+  if (desiredBypassrls !== (existing.bypassrls ?? false)) clauses.push(desiredBypassrls ? "BYPASSRLS" : "NOBYPASSRLS");
+  if (desiredReplication !== (existing.replication ?? false)) clauses.push(desiredReplication ? "REPLICATION" : "NOREPLICATION");
 
   if (desired.connection_limit !== undefined && desired.connection_limit !== existing.connection_limit) {
     clauses.push(`CONNECTION LIMIT ${desired.connection_limit}`);
@@ -2130,6 +2155,7 @@ async function planFunctionGrantDiff(
 /** Escape a value for use in a SQL VALUES clause */
 function seedLiteral(value: unknown): string {
   if (value === null || value === undefined) return "NULL";
+  if (isSqlExpression(value)) return value.expression;
   if (typeof value === "boolean") return value ? "TRUE" : "FALSE";
   if (typeof value === "number") return String(value);
   return `'${String(value).replace(/'/g, "''")}'`;
@@ -2156,10 +2182,18 @@ function getSeedKeyColumns(schema: TableSchema, seedCols: string[]): string[] {
   if (pkCols.length > 0 && pkCols.every((c) => seedCols.includes(c))) {
     return pkCols;
   }
-  // Fall back to a unique column present in seed data
+  // Fall back to a single-column unique constraint present in seed data
   for (const col of schema.columns) {
     if (col.unique && seedCols.includes(col.name)) {
       return [col.name];
+    }
+  }
+  // Fall back to a multi-column unique constraint whose columns are all in seed data
+  if (schema.unique_constraints) {
+    for (const uc of schema.unique_constraints) {
+      if (uc.columns.length > 0 && uc.columns.every((c) => seedCols.includes(c))) {
+        return uc.columns;
+      }
     }
   }
   return [];
@@ -2182,9 +2216,26 @@ function planSeeds(schema: TableSchema, pgSchema: string): Operation[] {
   const nonKeyCols = allSeedCols.filter((c) => !keyCols.includes(c));
   const qt = `"${pgSchema}"."${schema.table}"`;
 
-  // Build VALUES clause shared by both statements
+  // Build a map of column name → SQL type for casting VALUES
+  const colTypeMap = new Map<string, string>();
+  for (const col of schema.columns) {
+    colTypeMap.set(col.name, col.type);
+  }
+
+  // Build VALUES clause shared by both statements.
+  // Cast each literal to the column's declared type so PostgreSQL can compare
+  // typed columns (e.g. uuid) against the VALUES virtual table.
   const valuesRows = seeds.map((row) => {
-    const vals = allSeedCols.map((col) => seedLiteral(row[col]));
+    const vals = allSeedCols.map((col) => {
+      const lit = seedLiteral(row[col]);
+      const colType = colTypeMap.get(col);
+      // Don't cast raw SQL expressions or NULL — they are already typed
+      if (isSqlExpression(row[col]) || lit === "NULL") return lit;
+      // Serial types are just integers
+      if (colType && isSerialType(colType)) return lit;
+      if (colType) return `${lit}::${colType}`;
+      return lit;
+    });
     return `  (${vals.join(", ")})`;
   });
   const valuesList = valuesRows.join(",\n");
@@ -2194,7 +2245,8 @@ function planSeeds(schema: TableSchema, pgSchema: string): Operation[] {
   const stmts: string[] = [];
 
   // UPDATE: only rows where at least one non-key column differs
-  if (nonKeyCols.length > 0) {
+  // Skip updates when seeds_on_conflict is "DO NOTHING" (insert-only mode)
+  if (nonKeyCols.length > 0 && schema.seeds_on_conflict !== "DO NOTHING") {
     const setCols = nonKeyCols.map((c) => `"${c}" = v."${c}"`).join(", ");
     const whereKey = keyCols.map((c) => `t."${c}" = v."${c}"`).join(" AND ");
     const distinctCheck =

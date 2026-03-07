@@ -14,6 +14,7 @@ import type {
   PrecheckDef,
   EnumSchema,
   ExtensionsSchema,
+  SchemaGrantDef,
   ViewSchema,
   MaterializedViewSchema,
   UniqueConstraintDef,
@@ -23,6 +24,40 @@ import type {
   FunctionGrantDef,
 } from "./types.js";
 import { logger } from "../core/logger.js";
+
+/**
+ * Wrapper for raw SQL expressions in seed data.
+ * Created by the !sql YAML tag; detected by seedLiteral() in the planner.
+ */
+export class SqlExpression {
+  constructor(public readonly expression: string) {}
+}
+
+/** Check if a value is a SqlExpression (raw SQL in seed data) */
+export function isSqlExpression(value: unknown): value is SqlExpression {
+  return value instanceof SqlExpression;
+}
+
+/** Custom YAML tags for schema-flow */
+import type { ScalarTag } from "yaml";
+
+const sqlTag: ScalarTag = {
+  tag: "!sql",
+  resolve(value: string) {
+    return new SqlExpression(value);
+  },
+};
+
+/** YAML parse options with custom tags */
+const yamlOptions = {
+  customTags: [sqlTag] as ScalarTag[],
+};
+
+/** Parse YAML content with schema-flow custom tags (!sql) */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export function parseYamlWithTags(content: string): any {
+  return parseYaml(content, yamlOptions);
+}
 
 /** Parse a single column definition from raw YAML */
 export function parseColumnDef(col: Record<string, unknown>, filePath: string): ColumnDef {
@@ -76,7 +111,7 @@ export function parseColumnDef(col: Record<string, unknown>, filePath: string): 
         }
       : undefined,
     generated: col.generated !== undefined ? String(col.generated) : undefined,
-    comment: col.comment !== undefined ? String(col.comment) : undefined,
+    comment: col.comment !== undefined ? String(col.comment) : col.description !== undefined ? String(col.description) : undefined,
   };
 }
 
@@ -143,7 +178,7 @@ export function parsePolicyDef(policy: Record<string, unknown>, filePath: string
 
 export function parseTableFile(filePath: string): TableSchema {
   const content = readFileSync(filePath, "utf-8");
-  const raw = parseYaml(content);
+  const raw = parseYamlWithTags(content);
 
   if (!raw || typeof raw !== "object") {
     throw new Error(`Invalid schema file: ${filePath} — expected a YAML object`);
@@ -214,12 +249,42 @@ export function parseTableFile(filePath: string): TableSchema {
     schema.grants = raw.grants.map((g: Record<string, unknown>) => parseGrantDef(g, filePath));
   }
 
-  if (raw.seeds && Array.isArray(raw.seeds)) {
-    schema.seeds = raw.seeds as Record<string, unknown>[];
+  // seeds: can be an array of rows OR an object { on_conflict, rows }
+  if (raw.seeds) {
+    if (Array.isArray(raw.seeds)) {
+      schema.seeds = raw.seeds as Record<string, unknown>[];
+    } else if (typeof raw.seeds === "object" && raw.seeds.rows && Array.isArray(raw.seeds.rows)) {
+      schema.seeds = raw.seeds.rows as Record<string, unknown>[];
+      if (raw.seeds.on_conflict !== undefined) {
+        schema.seeds_on_conflict = String(raw.seeds.on_conflict);
+      }
+    }
   }
 
+  if (raw.seeds_on_conflict !== undefined && !schema.seeds_on_conflict) {
+    schema.seeds_on_conflict = String(raw.seeds_on_conflict);
+  }
+
+  // description: is an alias for comment: (comment takes precedence)
   if (raw.comment !== undefined) {
     schema.comment = String(raw.comment);
+  } else if (raw.description !== undefined) {
+    schema.comment = String(raw.description);
+  }
+
+  // Extract column-level check: sugar into checks array
+  const columnChecks: { name?: string; expression: string }[] = [];
+  for (const col of schema.columns) {
+    const rawCol = raw.columns.find((c: Record<string, unknown>) => c.name === col.name);
+    if (rawCol?.check !== undefined) {
+      columnChecks.push({
+        name: `chk_${schema.table}_${col.name}`,
+        expression: String(rawCol.check),
+      });
+    }
+  }
+  if (columnChecks.length > 0) {
+    schema.checks = [...(schema.checks || []), ...columnChecks];
   }
 
   if (raw.prechecks && Array.isArray(raw.prechecks)) {
@@ -322,9 +387,30 @@ export function parseExtensionsFile(filePath: string): ExtensionsSchema {
     throw new Error(`Extensions file ${filePath} must define "extensions" as an array`);
   }
 
-  return {
+  const result: ExtensionsSchema = {
     extensions: raw.extensions.map(String),
   };
+
+  if (raw.schema_grants && Array.isArray(raw.schema_grants)) {
+    result.schema_grants = raw.schema_grants.map((sg: Record<string, unknown>) => {
+      if (!sg.schemas || !Array.isArray(sg.schemas)) {
+        throw new Error(`Each schema_grant in ${filePath} must have "schemas" as an array`);
+      }
+      if (!sg.privilege) {
+        throw new Error(`Each schema_grant in ${filePath} must have "privilege"`);
+      }
+      if (!sg.roles || !Array.isArray(sg.roles)) {
+        throw new Error(`Each schema_grant in ${filePath} must have "roles" as an array`);
+      }
+      return {
+        schemas: (sg.schemas as string[]).map(String),
+        privilege: String(sg.privilege).toUpperCase(),
+        roles: (sg.roles as string[]).map(String),
+      } as SchemaGrantDef;
+    });
+  }
+
+  return result;
 }
 
 export function parseViewFile(filePath: string): ViewSchema {
@@ -407,11 +493,42 @@ export function parseFunctionFile(filePath: string): FunctionSchema {
     }
   }
 
+  if (raw.volatility !== undefined) {
+    const vol = String(raw.volatility).toLowerCase();
+    if (vol === "volatile" || vol === "stable" || vol === "immutable") {
+      fn.volatility = vol;
+    }
+  }
+
+  if (raw.parallel !== undefined) {
+    const par = String(raw.parallel).toLowerCase();
+    if (par === "unsafe" || par === "restricted" || par === "safe") {
+      fn.parallel = par;
+    }
+  }
+
+  if (raw.strict !== undefined) fn.strict = Boolean(raw.strict);
+  if (raw.leakproof !== undefined) fn.leakproof = Boolean(raw.leakproof);
+  if (raw.cost !== undefined) fn.cost = Number(raw.cost);
+  if (raw.rows !== undefined) fn.rows = Number(raw.rows);
+
+  if (raw.set !== undefined && typeof raw.set === "object" && !Array.isArray(raw.set)) {
+    const setMap: Record<string, string> = {};
+    for (const [key, val] of Object.entries(raw.set as Record<string, unknown>)) {
+      setMap[key] = String(val);
+    }
+    fn.set = setMap;
+  }
+
   if (raw.grants && Array.isArray(raw.grants)) {
     fn.grants = raw.grants.map((g: Record<string, unknown>) => parseFunctionGrantDef(g, filePath));
   }
 
-  if (raw.comment) fn.comment = String(raw.comment);
+  if (raw.comment) {
+    fn.comment = String(raw.comment);
+  } else if (raw.description) {
+    fn.comment = String(raw.description);
+  }
 
   return fn;
 }
@@ -501,13 +618,19 @@ export function parseRoleFile(filePath: string): RoleSchema {
   if (raw.createdb !== undefined) role.createdb = Boolean(raw.createdb);
   if (raw.createrole !== undefined) role.createrole = Boolean(raw.createrole);
   if (raw.inherit !== undefined) role.inherit = Boolean(raw.inherit);
+  if (raw.bypassrls !== undefined) role.bypassrls = Boolean(raw.bypassrls);
+  if (raw.replication !== undefined) role.replication = Boolean(raw.replication);
   if (raw.connection_limit !== undefined) role.connection_limit = Number(raw.connection_limit);
 
   if (raw.in && Array.isArray(raw.in)) {
     role.in = raw.in.map(String);
   }
 
-  if (raw.comment) role.comment = String(raw.comment);
+  if (raw.comment) {
+    role.comment = String(raw.comment);
+  } else if (raw.description) {
+    role.comment = String(raw.description);
+  }
 
   return role;
 }

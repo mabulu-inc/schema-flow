@@ -169,6 +169,8 @@ export interface TableSchema {
   prechecks?: PrecheckDef[];
   /** Seed rows to insert/update on every migration */
   seeds?: Record<string, unknown>[];
+  /** Seed conflict strategy: omit for default UPDATE+INSERT, "DO NOTHING" for insert-only */
+  seeds_on_conflict?: string;
   /** Table description/comment */
   comment?: string;
 }
@@ -192,6 +194,20 @@ export interface FunctionSchema {
   replace?: boolean;
   /** Security mode: "definer" generates SECURITY DEFINER, "invoker" is the default */
   security?: "definer" | "invoker";
+  /** Volatility: "volatile" (default), "stable", or "immutable" */
+  volatility?: "volatile" | "stable" | "immutable";
+  /** Parallel safety: "unsafe" (default), "restricted", or "safe" */
+  parallel?: "unsafe" | "restricted" | "safe";
+  /** STRICT / RETURNS NULL ON NULL INPUT (default false = CALLED ON NULL INPUT) */
+  strict?: boolean;
+  /** LEAKPROOF qualifier (default false) */
+  leakproof?: boolean;
+  /** Planner cost estimate (COST n, default 100) */
+  cost?: number;
+  /** Estimated rows for set-returning functions (ROWS n) */
+  rows?: number;
+  /** Runtime configuration parameters: SET key = value */
+  set?: Record<string, string>;
   /** Function grants (EXECUTE) */
   grants?: FunctionGrantDef[];
   /** Function description/comment */
@@ -214,9 +230,20 @@ export interface EnumSchema {
   comment?: string;
 }
 
+export interface SchemaGrantDef {
+  /** Schemas to grant on */
+  schemas: string[];
+  /** Privilege to grant (e.g., "USAGE", "CREATE") */
+  privilege: string;
+  /** Roles to grant to */
+  roles: string[];
+}
+
 export interface ExtensionsSchema {
   /** List of PostgreSQL extensions to enable */
   extensions: string[];
+  /** Schema-level grants (e.g., GRANT USAGE ON SCHEMA) */
+  schema_grants?: SchemaGrantDef[];
 }
 
 export interface ViewSchema {
@@ -256,6 +283,10 @@ export interface RoleSchema {
   createrole?: boolean;
   /** Inherits privileges of granted roles (default true) */
   inherit?: boolean;
+  /** Bypass row-level security (default false) */
+  bypassrls?: boolean;
+  /** Replication privilege (default false) */
+  replication?: boolean;
   /** Maximum connections (-1 = unlimited, default -1) */
   connection_limit?: number;
   /** Role memberships — GRANT <role> TO this role */

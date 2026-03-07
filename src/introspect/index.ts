@@ -1034,13 +1034,16 @@ export interface DbRole {
   rolcreatedb: boolean;
   rolcreaterole: boolean;
   rolinherit: boolean;
+  rolbypassrls: boolean;
+  rolreplication: boolean;
   rolconnlimit: number;
 }
 
 /** Get all user-defined roles (excludes system roles) */
 export async function getExistingRoles(client: pg.PoolClient): Promise<RoleSchema[]> {
   const res = await client.query<DbRole>(
-    `SELECT rolname, rolcanlogin, rolsuper, rolcreatedb, rolcreaterole, rolinherit, rolconnlimit
+    `SELECT rolname, rolcanlogin, rolsuper, rolcreatedb, rolcreaterole, rolinherit,
+            rolbypassrls, rolreplication, rolconnlimit
      FROM pg_roles
      WHERE rolname NOT LIKE 'pg_%'
        AND rolname != 'postgres'
@@ -1057,6 +1060,8 @@ export async function getExistingRoles(client: pg.PoolClient): Promise<RoleSchem
       createdb: row.rolcreatedb,
       createrole: row.rolcreaterole,
       inherit: row.rolinherit,
+      bypassrls: row.rolbypassrls,
+      replication: row.rolreplication,
       connection_limit: row.rolconnlimit,
     };
 
