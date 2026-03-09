@@ -1527,4 +1527,44 @@ grants:
     const result2 = await runMigrate(config);
     expect(result2.success).toBe(true);
   });
+
+  it("grants EXECUTE on a function with DEFAULT args", async () => {
+    writeSchema(
+      ctx.project.rolesDir,
+      "fn_default_reader.yaml",
+      `role: fn_default_reader
+login: false
+`,
+    );
+    writeSchema(
+      ctx.project.functionsDir,
+      "with_defaults.yaml",
+      `name: with_defaults
+language: sql
+args:
+  - name: p_name
+    type: text
+  - name: p_greeting
+    type: text
+    default: "'hello'"
+returns: text
+body: "SELECT p_greeting || ' ' || p_name;"
+replace: true
+grants:
+  - to: fn_default_reader
+    privileges: [EXECUTE]
+`,
+    );
+
+    const config = resolveConfig({
+      connectionString: ctx.connectionString,
+      baseDir: ctx.project.baseDir,
+      dryRun: false,
+    });
+    const result = await runMigrate(config);
+    expect(result.success).toBe(true);
+
+    const grants = await getFunctionGrants(ctx.connectionString, "with_defaults", "fn_default_reader");
+    expect(grants).toContain("EXECUTE");
+  });
 });

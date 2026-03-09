@@ -3,21 +3,22 @@
 // Key design: CREATE TABLEs first (without FKs), then ALTER TABLEs for FKs last
 // Safety: destructive operations (drops, narrowing changes) are blocked by default
 
-import type {
-  TableSchema,
-  ColumnDef,
-  IndexDef,
-  CheckDef,
-  TriggerDef,
-  PolicyDef,
-  EnumSchema,
-  ExtensionsSchema,
-  ViewSchema,
-  MaterializedViewSchema,
-  UniqueConstraintDef,
-  RoleSchema,
-  GrantDef,
-  FunctionSchema,
+import {
+  type TableSchema,
+  type ColumnDef,
+  type IndexDef,
+  type CheckDef,
+  type TriggerDef,
+  type PolicyDef,
+  type EnumSchema,
+  type ExtensionsSchema,
+  type ViewSchema,
+  type MaterializedViewSchema,
+  type UniqueConstraintDef,
+  type RoleSchema,
+  type GrantDef,
+  type FunctionSchema,
+  renderArgsForGrant,
 } from "../schema/types.js";
 import {
   introspectTable,
@@ -2082,7 +2083,7 @@ async function planFunctionGrantDiff(
   pgSchema: string,
 ): Promise<Operation[]> {
   const ops: Operation[] = [];
-  const argsClause = fn.args ? `(${fn.args})` : "()";
+  const argsClause = renderArgsForGrant(fn.args);
   const qualifiedName = `"${pgSchema}"."${fn.name}"${argsClause}`;
 
   // Introspect existing function grants

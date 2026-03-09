@@ -15,7 +15,13 @@ name: grant_role
 language: plpgsql
 returns: void
 security: definer
-args: "p_user_id integer, p_tenant_id uuid, p_role text"
+args:
+  - name: p_user_id
+    type: integer
+  - name: p_tenant_id
+    type: uuid
+  - name: p_role
+    type: text
 body: |
   DECLARE
     v_membership_id integer;

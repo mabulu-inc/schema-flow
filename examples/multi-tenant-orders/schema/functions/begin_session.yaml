@@ -28,7 +28,11 @@ name: begin_session
 language: plpgsql
 returns: "TABLE(roles text[], pg_role text)"
 security: definer
-args: "p_user_id integer, p_tenant_id uuid"
+args:
+  - name: p_user_id
+    type: integer
+  - name: p_tenant_id
+    type: uuid
 body: |
   DECLARE
     v_membership_id integer;

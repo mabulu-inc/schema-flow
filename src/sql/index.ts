@@ -4,7 +4,7 @@
 import { writeFileSync, mkdirSync, existsSync } from "node:fs";
 import path from "node:path";
 import type { MigrationPlan } from "../planner/index.js";
-import type { FunctionSchema } from "../schema/types.js";
+import { type FunctionSchema, renderArgsForCreate } from "../schema/types.js";
 import { utcTimestamp } from "../core/files.js";
 
 export interface SqlFormatOptions {
@@ -49,7 +49,7 @@ export function formatMigrationSql(
     lines.push("-- Functions");
     for (const fn of functions) {
       const replaceClause = fn.replace ? "OR REPLACE " : "";
-      const argsClause = fn.args ? `(${fn.args})` : "()";
+      const argsClause = renderArgsForCreate(fn.args);
       const qualifiers: string[] = [];
       qualifiers.push(`LANGUAGE ${fn.language}`);
       if (fn.volatility) qualifiers.push(fn.volatility.toUpperCase());

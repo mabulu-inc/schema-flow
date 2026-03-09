@@ -1203,7 +1203,9 @@ describe("drift — functions", () => {
       `name: add_one
 returns: integer
 language: plpgsql
-args: "x integer"
+args:
+  - name: x
+    type: integer
 body: |
   SELECT x + 1;
 replace: true
@@ -1226,7 +1228,6 @@ replace: true
       `name: my_fn
 returns: void
 language: plpgsql
-args: ""
 body: |
   BEGIN END;
 replace: true
@@ -1245,7 +1246,6 @@ replace: true
       `name: missing_fn
 returns: void
 language: plpgsql
-args: ""
 body: |
   BEGIN END;
 replace: true
@@ -1539,7 +1539,11 @@ describe("drift — function args", () => {
       `name: test_fn
 returns: integer
 language: sql
-args: "x integer, y integer"
+args:
+  - name: x
+    type: integer
+  - name: y
+    type: integer
 body: |
   SELECT x + y;
 replace: true

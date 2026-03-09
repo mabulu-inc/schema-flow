@@ -185,11 +185,49 @@ export interface ForeignKeyAction {
   onUpdate: string;
 }
 
+export interface FunctionArg {
+  name: string;
+  type: string;
+  mode?: "in" | "out" | "inout" | "variadic";
+  default?: string;
+}
+
+/** Render args for CREATE FUNCTION — includes DEFAULTs */
+export function renderArgsForCreate(args?: FunctionArg[]): string {
+  if (!args || args.length === 0) return "()";
+  const parts = args.map((a) => {
+    const mode = a.mode && a.mode !== "in" ? `${a.mode.toUpperCase()} ` : "";
+    const def = a.default !== undefined ? ` DEFAULT ${a.default}` : "";
+    return `${mode}${a.name} ${a.type}${def}`;
+  });
+  return `(${parts.join(", ")})`;
+}
+
+/** Render args for GRANT/REVOKE/COMMENT — types only, no names or DEFAULTs */
+export function renderArgsForGrant(args?: FunctionArg[]): string {
+  if (!args || args.length === 0) return "()";
+  const parts = args.map((a) => {
+    const mode = a.mode && a.mode !== "in" ? `${a.mode.toUpperCase()} ` : "";
+    return `${mode}${a.type}`;
+  });
+  return `(${parts.join(", ")})`;
+}
+
+/** Render args as PostgreSQL identity string (name + type, no DEFAULTs) for drift comparison */
+export function renderArgsForIdentity(args?: FunctionArg[]): string {
+  if (!args || args.length === 0) return "";
+  const parts = args.map((a) => {
+    const mode = a.mode && a.mode !== "in" ? `${a.mode.toUpperCase()} ` : "";
+    return `${mode}${a.name} ${a.type}`;
+  });
+  return parts.join(", ");
+}
+
 export interface FunctionSchema {
   name: string;
   language: string;
   returns: string;
-  args?: string;
+  args?: FunctionArg[];
   body: string;
   replace?: boolean;
   /** Security mode: "definer" generates SECURITY DEFINER, "invoker" is the default */

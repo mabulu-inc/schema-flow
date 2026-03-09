@@ -1313,7 +1313,11 @@ describe("lifecycle — functions", () => {
 function: add_lc
 language: sql
 returns: integer
-args: "x integer, y integer"
+args:
+  - name: x
+    type: integer
+  - name: y
+    type: integer
 body: "SELECT x + y"
 `,
     );
@@ -1343,7 +1347,11 @@ body: "SELECT x + y"
 function: add_lc
 language: sql
 returns: bigint
-args: "x integer, y integer"
+args:
+  - name: x
+    type: integer
+  - name: y
+    type: integer
 body: "SELECT (x + y)::bigint"
 `,
     );
@@ -1407,7 +1415,9 @@ body: |
 function: body_lc
 language: sql
 returns: integer
-args: "n integer"
+args:
+  - name: n
+    type: integer
 body: "SELECT n * 2"
 `,
     );
@@ -1434,7 +1444,9 @@ body: "SELECT n * 2"
 function: body_lc
 language: sql
 returns: integer
-args: "n integer"
+args:
+  - name: n
+    type: integer
 body: "SELECT n * 3"
 `,
     );

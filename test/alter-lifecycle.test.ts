@@ -1277,7 +1277,9 @@ describe("alter — function alterations", () => {
 function: alt_double
 language: sql
 returns: integer
-args: "n integer"
+args:
+  - name: n
+    type: integer
 body: "SELECT n * 2"
 `,
     );
@@ -1294,7 +1296,9 @@ body: "SELECT n * 2"
 function: alt_double
 language: sql
 returns: integer
-args: "n integer"
+args:
+  - name: n
+    type: integer
 body: "SELECT n * 3"
 `,
     );

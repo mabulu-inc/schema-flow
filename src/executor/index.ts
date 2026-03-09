@@ -18,14 +18,16 @@ import {
   parseRoleFile,
 } from "../schema/parser.js";
 import { loadMixins, expandMixins } from "../schema/mixins.js";
-import type {
-  FunctionSchema,
-  TableSchema,
-  EnumSchema,
-  ExtensionsSchema,
-  ViewSchema,
-  MaterializedViewSchema,
-  RoleSchema,
+import {
+  type FunctionSchema,
+  type TableSchema,
+  type EnumSchema,
+  type ExtensionsSchema,
+  type ViewSchema,
+  type MaterializedViewSchema,
+  type RoleSchema,
+  renderArgsForCreate,
+  renderArgsForGrant,
 } from "../schema/types.js";
 import { FileTracker } from "../core/tracker.js";
 import { withClient, retryOnTimeout, type ClientOptions } from "../core/db.js";
@@ -547,7 +549,7 @@ export async function runMigrate(config: SchemaFlowConfig): Promise<ExecutionRes
                     // Phase 2: functions (after enums exist, before triggers)
                     for (const fn of parsedFunctions) {
                       const replaceClause = fn.replace ? "OR REPLACE " : "";
-                      const argsClause = fn.args ? `(${fn.args})` : "()";
+                      const argsClause = renderArgsForCreate(fn.args);
                       const qualifiers: string[] = [];
                       qualifiers.push(`LANGUAGE ${fn.language}`);
                       if (fn.volatility) qualifiers.push(fn.volatility.toUpperCase());
@@ -576,7 +578,7 @@ export async function runMigrate(config: SchemaFlowConfig): Promise<ExecutionRes
                     // Apply function comments
                     for (const fn of parsedFunctions) {
                       if (fn.comment) {
-                        const argsClause = fn.args ? `(${fn.args})` : "()";
+                        const argsClause = renderArgsForGrant(fn.args);
                         const currentComment = await getFunctionComment(client, fn.name, config.pgSchema);
                         if (fn.comment !== currentComment) {
                           const escapedComment = fn.comment.replace(/'/g, "''");
@@ -917,7 +919,7 @@ export async function runValidate(config: SchemaFlowConfig): Promise<ValidationR
       // Phase 2: functions (after enums, before triggers)
       for (const fn of parsedFunctions) {
         const replaceClause = fn.replace ? "OR REPLACE " : "";
-        const argsClause = fn.args ? `(${fn.args})` : "()";
+        const argsClause = renderArgsForCreate(fn.args);
         const securityClause = fn.security === "definer" ? " SECURITY DEFINER" : "";
         const sql = `CREATE ${replaceClause}FUNCTION ${fn.name}${argsClause} RETURNS ${fn.returns} LANGUAGE ${fn.language}${securityClause} AS $fn_body$\n${fn.body}\n$fn_body$;`;
         logger.debug(`Validating function: ${fn.name}`);

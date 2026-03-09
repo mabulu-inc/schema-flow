@@ -224,7 +224,9 @@ body: "SELECT 'stable'::text;"
       `name: strict_fn
 language: sql
 returns: int
-args: x int
+args:
+  - name: x
+    type: int
 strict: true
 leakproof: true
 cost: 10
@@ -296,7 +298,11 @@ body: "SELECT current_setting('search_path');"
       `name: immutable_fn
 language: sql
 returns: int
-args: a int, b int
+args:
+  - name: a
+    type: int
+  - name: b
+    type: int
 volatility: immutable
 parallel: safe
 body: "SELECT a + b;"

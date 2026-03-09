@@ -52,7 +52,7 @@ import {
   type DbIndex,
   getFunctionExecuteGrants,
 } from "../introspect/index.js";
-import type { FunctionSchema } from "../schema/types.js";
+import { type FunctionSchema, renderArgsForIdentity } from "../schema/types.js";
 
 export interface DriftItem {
   category:
@@ -328,9 +328,9 @@ export async function detectDrift(config: SchemaFlowConfig): Promise<DriftReport
         if (yamlSecurity !== dbSecurity) {
           details.push({ field: "security", expected: yamlSecurity, actual: dbSecurity });
         }
-        // Args comparison
+        // Args comparison — render YAML args as identity string (no DEFAULTs) to match pg_get_function_identity_arguments()
         if (fn.args !== undefined) {
-          const yamlArgs = (fn.args || "").replace(/\s+/g, " ").trim();
+          const yamlArgs = renderArgsForIdentity(fn.args).replace(/\s+/g, " ").trim();
           const dbArgs = (dbFn.parameter_list || "").replace(/\s+/g, " ").trim();
           if (yamlArgs !== dbArgs) {
             details.push({ field: "args", expected: yamlArgs || "(none)", actual: dbArgs || "(none)" });

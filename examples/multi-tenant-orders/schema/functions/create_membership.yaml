@@ -14,7 +14,16 @@ name: create_membership
 language: plpgsql
 returns: integer
 security: definer
-args: "p_user_id integer, p_tenant_id uuid, p_roles text[], p_invited_by integer DEFAULT NULL"
+args:
+  - name: p_user_id
+    type: integer
+  - name: p_tenant_id
+    type: uuid
+  - name: p_roles
+    type: text[]
+  - name: p_invited_by
+    type: integer
+    default: "NULL"
 body: |
   DECLARE
     v_membership_id integer;

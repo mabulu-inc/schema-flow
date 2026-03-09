@@ -5,7 +5,7 @@ import { writeFileSync, mkdirSync, existsSync } from "node:fs";
 import path from "node:path";
 import { stringify as toYaml, Scalar } from "yaml";
 import type { SchemaFlowConfig } from "../core/config.js";
-import type { TableSchema, GrantPrivilege } from "../schema/types.js";
+import type { TableSchema, GrantPrivilege, FunctionArg } from "../schema/types.js";
 import {
   getExistingTables,
   introspectTable,
@@ -461,6 +461,27 @@ function cleanFunctionBody(body: string): Scalar {
   return scalar;
 }
 
+/** Parse a PostgreSQL parameter list string (from pg_get_function_identity_arguments) into structured args */
+function parseParameterList(paramList: string): FunctionArg[] {
+  const trimmed = paramList.trim();
+  if (!trimmed) return [];
+
+  return trimmed.split(",").map((part) => {
+    const tokens = part.trim().split(/\s+/);
+    // Check for mode prefix (IN, OUT, INOUT, VARIADIC)
+    const firstLower = tokens[0].toLowerCase();
+    if (firstLower === "out" || firstLower === "inout" || firstLower === "variadic") {
+      return { name: tokens[1], type: tokens.slice(2).join(" "), mode: firstLower as FunctionArg["mode"] };
+    }
+    // Skip explicit IN prefix
+    if (firstLower === "in" && tokens.length > 2) {
+      return { name: tokens[1], type: tokens.slice(2).join(" ") };
+    }
+    // Default: name type
+    return { name: tokens[0], type: tokens.slice(1).join(" ") };
+  });
+}
+
 /** Convert a DB function to YAML */
 function functionToYaml(
   fn: {
@@ -488,7 +509,7 @@ function functionToYaml(
     name: fn.routine_name,
     language: fn.external_language?.toLowerCase() || "plpgsql",
     returns,
-    args: fn.parameter_list || "",
+    args: parseParameterList(fn.parameter_list || ""),
     body: cleanFunctionBody(fn.routine_definition || ""),
     replace: true,
   };

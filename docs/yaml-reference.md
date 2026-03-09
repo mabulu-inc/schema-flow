@@ -339,12 +339,21 @@ comment: "Auto-set updated_at timestamp"
 | `name` | string | **Yes** | - | Function name. The key `function` is also accepted as an alias for `name`. |
 | `language` | string | No | `plpgsql` | Function language (`plpgsql`, `sql`, `plpython3u`, etc.). |
 | `returns` | string | No | `void` | Return type (`trigger`, `void`, `integer`, `text`, `setof record`, etc.). |
-| `args` | string | No | `""` | Function arguments as a SQL signature string (e.g., `"p_id integer, p_name text"`). |
+| `args` | FunctionArg[] | No | `[]` | Function arguments as an array of `{name, type, mode?, default?}` objects (see below). |
 | `body` | string | **Yes** | - | Function body. Use YAML block scalar (`\|`) for multi-line. |
 | `replace` | boolean | No | `true` | Use `CREATE OR REPLACE`. Set to `false` to use `CREATE`. |
 | `security` | string | No | `invoker` | Security mode. `definer` runs as the function owner; `invoker` (default) runs as the calling user. |
 | `grants` | FunctionGrantDef[] | No | - | Function privilege grants (see below). |
 | `comment` | string | No | - | PostgreSQL `COMMENT ON FUNCTION`. |
+
+#### Function Argument (`FunctionArg`)
+
+| Key | Type | Required | Default | Description |
+|-----|------|----------|---------|-------------|
+| `name` | string | **Yes** | - | Parameter name (e.g., `p_user_id`). |
+| `type` | string | **Yes** | - | PostgreSQL type (e.g., `integer`, `text`, `uuid`, `text[]`). |
+| `mode` | string | No | `in` | Parameter mode: `in`, `out`, `inout`, or `variadic`. |
+| `default` | string | No | - | Default value expression (e.g., `"NULL"`, `"'hello'"`). |
 
 #### Function Grant (`FunctionGrantDef`)
 

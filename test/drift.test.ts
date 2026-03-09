@@ -209,7 +209,6 @@ columns:
       `name: session_authorization
 language: plpgsql
 returns: record
-args: ""
 body: |
   BEGIN
     RETURN QUERY SELECT NULL::uuid, NULL::uuid;
@@ -249,7 +248,6 @@ security: definer
       `name: greet
 language: plpgsql
 returns: text
-args: ""
 body: |
   BEGIN
     RETURN 'goodbye';
@@ -287,7 +285,9 @@ replace: true
       `name: add_one
 language: plpgsql
 returns: integer
-args: "x integer"
+args:
+  - name: x
+    type: integer
 body: |
   BEGIN
     RETURN x + 1;

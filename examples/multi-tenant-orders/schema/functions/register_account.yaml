@@ -13,7 +13,11 @@ name: register_account
 language: plpgsql
 returns: integer
 security: definer
-args: "p_email text, p_display_name text"
+args:
+  - name: p_email
+    type: text
+  - name: p_display_name
+    type: text
 body: |
   DECLARE
     v_user_id integer;

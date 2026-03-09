@@ -7,6 +7,7 @@ import { parse as parseYaml } from "yaml";
 import type {
   TableSchema,
   FunctionSchema,
+  FunctionArg,
   ColumnDef,
   TriggerDef,
   PolicyDef,
@@ -466,6 +467,40 @@ export function parseMaterializedViewFile(filePath: string): MaterializedViewSch
   return mv;
 }
 
+/** Parse the `args` field from function YAML into structured FunctionArg[] */
+function parseFunctionArgs(raw: unknown, filePath: string): FunctionArg[] | undefined {
+  if (raw === undefined || raw === null) return undefined;
+
+  if (!Array.isArray(raw)) {
+    throw new Error(
+      `Function args in ${filePath} must be an array of {name, type} objects. ` +
+        `Got: ${typeof raw}. Example:\nargs:\n  - name: p_id\n    type: integer`,
+    );
+  }
+
+  return raw.map((item: Record<string, unknown>, i: number) => {
+    if (!item.name || !item.type) {
+      throw new Error(
+        `Function arg ${i} in ${filePath} must have "name" and "type" fields. Got: ${JSON.stringify(item)}`,
+      );
+    }
+    const arg: FunctionArg = {
+      name: String(item.name),
+      type: String(item.type),
+    };
+    if (item.mode !== undefined) {
+      const mode = String(item.mode).toLowerCase();
+      if (mode === "in" || mode === "out" || mode === "inout" || mode === "variadic") {
+        arg.mode = mode;
+      }
+    }
+    if (item.default !== undefined) {
+      arg.default = String(item.default);
+    }
+    return arg;
+  });
+}
+
 export function parseFunctionFile(filePath: string): FunctionSchema {
   const content = readFileSync(filePath, "utf-8");
   const raw = parseYaml(content);
@@ -481,7 +516,7 @@ export function parseFunctionFile(filePath: string): FunctionSchema {
     name,
     language: raw.language || "plpgsql",
     returns: raw.returns || "void",
-    args: raw.args || "",
+    args: parseFunctionArgs(raw.args, filePath),
     body: raw.body,
     replace: raw.replace !== false,
   };
