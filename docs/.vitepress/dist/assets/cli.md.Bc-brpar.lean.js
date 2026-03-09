@@ -1,0 +1,1 @@
+import{_ as s,o as i,c as t,ag as e}from"./chunks/framework.D6xN05sP.js";const k=JSON.parse('{"title":"CLI Commands","description":"","frontmatter":{},"headers":[],"relativePath":"cli.md","filePath":"cli.md"}'),n={name:"cli.md"};function l(h,a,d,p,o,r){return i(),t("div",null,[...a[0]||(a[0]=[e("",60)])])}const g=s(n,[["render",l]]);export{k as __pageData,g as default};
