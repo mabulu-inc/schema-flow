@@ -320,7 +320,6 @@ Defines a PostgreSQL function or trigger function.
 name: set_updated_at
 language: plpgsql
 returns: trigger
-args: ""
 security: definer
 replace: true
 body: |
@@ -332,6 +331,23 @@ grants:
   - to: [app_user]
     privileges: [EXECUTE]
 comment: "Auto-set updated_at timestamp"
+```
+
+Function with arguments and defaults:
+
+```yaml
+name: begin_session
+language: plpgsql
+returns: void
+security: definer
+args:
+  - name: p_role
+    type: text
+  - name: p_user_id
+    type: text
+  - name: p_tenant_id
+    type: text
+    default: "''"
 ```
 
 | Key | Type | Required | Default | Description |
