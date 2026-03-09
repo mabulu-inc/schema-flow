@@ -1455,6 +1455,44 @@ body: "SELECT n * 3"
     const m = find(report.items, { category: "function", direction: "mismatch" });
     expect(m.length).toBeGreaterThanOrEqual(1);
   });
+
+  it("function arg order is preserved at runtime", async () => {
+    writeSchema(
+      ctx.project.functionsDir,
+      "arg_order_lc.yaml",
+      `
+function: arg_order_lc
+language: sql
+returns: text
+args:
+  - name: first_val
+    type: text
+  - name: second_val
+    type: integer
+  - name: third_val
+    type: text
+    default: "'default'"
+body: "SELECT first_val || ':' || second_val::text || ':' || third_val"
+`,
+    );
+    await migrate(ctx);
+
+    await closePool();
+    const pool = new Pool({ connectionString: ctx.connectionString, max: 2 });
+    const client = await pool.connect();
+    try {
+      // Call with all args — verify order is correct
+      const res = await client.query(`SELECT arg_order_lc('hello', 42, 'world')`);
+      expect(res.rows[0].arg_order_lc).toBe("hello:42:world");
+
+      // Call with default — verify third arg defaults correctly
+      const res2 = await client.query(`SELECT arg_order_lc('hi', 7)`);
+      expect(res2.rows[0].arg_order_lc).toBe("hi:7:default");
+    } finally {
+      client.release();
+      await pool.end();
+    }
+  });
 });
 
 // ─── Enums ───────────────────────────────────────────────────────────────────
